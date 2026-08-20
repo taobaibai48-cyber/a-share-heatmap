@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 
 import {
   getQuoteData,
+  getQuoteDataByCodes,
   isHeatmapPeriodKey,
   isMarketKey,
   isMetricKey,
+  parseStockCodeList,
   periodFromMetricKey,
 } from "@/lib/market-heatmap";
 
@@ -14,8 +16,9 @@ export async function GET(request: NextRequest) {
   const marketParam = request.nextUrl.searchParams.get("market") ?? "all";
   const metricParam = request.nextUrl.searchParams.get("metric") ?? "1";
   const periodParam = request.nextUrl.searchParams.get("period");
+  const codes = parseStockCodeList(request.nextUrl.searchParams.get("codes"));
 
-  if (!isMarketKey(marketParam)) {
+  if (codes.length === 0 && !isMarketKey(marketParam)) {
     return NextResponse.json(
       {
         success: false,
@@ -47,7 +50,23 @@ export async function GET(request: NextRequest) {
 
   try {
     const period = periodParam && isHeatmapPeriodKey(periodParam) ? periodParam : periodFromMetricKey(metricParam);
-    const response = NextResponse.json(await getQuoteData(marketParam, period, metricParam));
+    const data = codes.length > 0
+      ? await getQuoteDataByCodes(codes, period, metricParam)
+      : isMarketKey(marketParam)
+        ? await getQuoteData(marketParam, period, metricParam)
+        : null;
+
+    if (!data) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: `Invalid market: ${marketParam}`,
+        },
+        { status: 400 }
+      );
+    }
+
+    const response = NextResponse.json(data);
     response.headers.set("Cache-Control", "public, s-maxage=8, stale-while-revalidate=30");
 
     return response;

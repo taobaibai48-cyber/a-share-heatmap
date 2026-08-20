@@ -32,9 +32,11 @@ import {
   Minimize2,
   Moon,
   Palette,
+  Plus,
   RotateCcw,
   Settings2,
   Share2,
+  Star,
   Sun,
   TrendingDown,
   TrendingUp,
@@ -44,6 +46,7 @@ import { toast } from "sonner";
 import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
+import { WatchlistManager } from "@/components/watchlist-panel";
 import { cn } from "@/lib/utils";
 import { getMessages, type HeatmapMessages, type Locale } from "@/lib/i18n";
 import {
@@ -88,13 +91,22 @@ import {
 import {
   heatmapPeriodKeys,
   isHeatmapPeriodKey,
-  isMarketKey,
+  isHeatmapUniverse,
   marketKeys,
+  watchlistMaxCount,
+  watchlistUniverseKey,
   type HeatmapPeriodKey,
+  type HeatmapUniverse,
   type MarketKey,
   type MarketOverviewResponse,
   type TreemapResponse,
 } from "@/lib/market-heatmap";
+import {
+  parseStoredWatchlist,
+  serializeWatchlist,
+  watchlistStorageKey,
+  type WatchlistItem,
+} from "@/lib/watchlist";
 
 type QuoteMap = Record<string, { price: number; changePct: number; turnoverAmount: number }>;
 
@@ -193,12 +205,33 @@ type PriceColorMode = "red-rise" | "green-rise";
 type ThemeColorKey = "green" | "red" | "blue" | "violet";
 type DisplayMode = "dark" | "light";
 type FilterOpenMode = "click" | "hover";
-type SettingsTab = "appearance" | "shortcuts" | "help" | "project";
+type SettingsTab = "appearance" | "watchlist" | "shortcuts" | "help" | "project";
 type HeatmapSizeMode = "marketCap" | "turnover";
 
 const refreshIntervalMs = 8000;
 const marketOptions: MarketKey[] = [...marketKeys];
 const periodOptions: HeatmapPeriodKey[] = [...heatmapPeriodKeys];
+
+function createEmptyWatchlistTreemap(period: HeatmapPeriodKey): TreemapResponse {
+  return {
+    market: "all",
+    period,
+    updatedAt: "",
+    stockCount: 0,
+    boardCount: 0,
+    summary: {
+      advanceCount: 0,
+      flatCount: 0,
+      declineCount: 0,
+      turnoverAmount: 0,
+      turnoverPreviousAmount: 0,
+      turnoverDelta: 0,
+      indexChangePct: 0,
+    },
+    nodes: [],
+    source: "direct",
+  };
+}
 const allBoardsValue = "__all__";
 const allTrendsValue = "__all__";
 const risingOnlyValue = "__rising__";
@@ -970,7 +1003,8 @@ function withShortcutTitle(label: string, key: string) {
   return `${label} (${formatShortcutLabel(key)})`;
 }
 
-function getMarketLabel(messages: HeatmapMessages, market: MarketKey) {
+function getMarketLabel(messages: HeatmapMessages, market: HeatmapUniverse) {
+  if (market === watchlistUniverseKey) return messages.markets.watchlist;
   if (market === "all") return messages.markets.all;
   if (market === "sse") return messages.markets.sse;
   if (market === "szse") return messages.markets.szse;
@@ -982,8 +1016,9 @@ function getMarketLabel(messages: HeatmapMessages, market: MarketKey) {
   return messages.markets.kcb;
 }
 
-function getCompactMarketLabel(messages: HeatmapMessages, market: MarketKey, locale: Locale) {
+function getCompactMarketLabel(messages: HeatmapMessages, market: HeatmapUniverse, locale: Locale) {
   if (locale === "en") {
+    if (market === watchlistUniverseKey) return "Watchlist";
     if (market === "all") return "A-Share";
     if (market === "sse") return "Shanghai";
     if (market === "szse") return "Shenzhen";
@@ -2899,6 +2934,7 @@ function SettingsDrawer({
   customHeatThemes,
   activeHeatTheme,
   shortcutBindings,
+  watchlist,
   onClose,
   onTabChange,
   onLocaleChange,
@@ -2910,6 +2946,9 @@ function SettingsDrawer({
   onCustomHeatThemesChange,
   onShortcutBindingsChange,
   onShortcutRecordingChange,
+  onWatchlistAdd,
+  onWatchlistRemove,
+  onWatchlistClear,
   areaTipMessage,
 }: {
   open: boolean;
@@ -2924,6 +2963,7 @@ function SettingsDrawer({
   customHeatThemes: HeatTheme[];
   activeHeatTheme: HeatTheme;
   shortcutBindings: ShortcutBindings;
+  watchlist: WatchlistItem[];
   areaTipMessage: string;
   onClose: () => void;
   onTabChange: (tab: SettingsTab) => void;
@@ -2936,6 +2976,9 @@ function SettingsDrawer({
   onCustomHeatThemesChange: (themes: HeatTheme[]) => void;
   onShortcutBindingsChange: (bindings: ShortcutBindings) => void;
   onShortcutRecordingChange: (recording: boolean) => void;
+  onWatchlistAdd: (item: WatchlistItem) => boolean;
+  onWatchlistRemove: (code: string) => void;
+  onWatchlistClear: () => void;
 }) {
   const isMobile = useIsMobile();
   const [recordingAction, setRecordingAction] = useState<ShortcutActionId | null>(null);
@@ -3024,6 +3067,7 @@ function SettingsDrawer({
   ];
   const tabs: Array<{ key: SettingsTab; label: string; icon: typeof Palette }> = [
     { key: "appearance", label: messages.settingsAppearance, icon: Palette },
+    { key: "watchlist", label: messages.settingsWatchlist, icon: Star },
     ...(!isMobile
       ? [
           { key: "shortcuts" as const, label: messages.settingsShortcuts, icon: Keyboard },
@@ -3083,7 +3127,7 @@ function SettingsDrawer({
             })}
           </nav>
 
-          <div className="min-h-0 overflow-y-auto p-3 md:p-4">
+          <div className={cn("min-h-0 p-3 md:p-4", tab === "watchlist" ? "flex flex-col overflow-hidden" : "overflow-y-auto")}>
             {tab === "appearance" && (
               <div className="space-y-4 md:space-y-6">
                 <section>
@@ -3261,6 +3305,22 @@ function SettingsDrawer({
                   onCustomHeatThemesChange={onCustomHeatThemesChange}
                 />
               </div>
+            )}
+
+            {tab === "watchlist" && (
+              <WatchlistManager
+                messages={messages}
+                locale={locale}
+                items={watchlist}
+                maxCount={watchlistMaxCount}
+                active={open && tab === "watchlist"}
+                changeTextColor={(changePct) =>
+                  getChangeTextColor(activeHeatTheme, changePct, priceColorMode, displayMode)
+                }
+                onAdd={onWatchlistAdd}
+                onRemove={onWatchlistRemove}
+                onClear={onWatchlistClear}
+              />
             )}
 
             {tab === "shortcuts" && (
@@ -3474,8 +3534,9 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     ...defaultShortcutBindings,
   }));
   const [shortcutRecording, setShortcutRecording] = useState(false);
-  const [market, setMarket] = useState<MarketKey>("all");
+  const [market, setMarket] = useState<HeatmapUniverse>("all");
   const [period, setPeriod] = useState<HeatmapPeriodKey>("day");
+  const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
   const [boardFilter, setBoardFilter] = useState<string[]>([]);
   const [trendFilter, setTrendFilter] = useState(allTrendsValue);
   const [changeRangeFilter, setChangeRangeFilter] = useState<ChangeRangeFilter>(emptyChangeRangeFilter);
@@ -3636,7 +3697,9 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       if (storedSizeMode === "marketCap" || storedSizeMode === "turnover") {
         setSizeMode(storedSizeMode);
       }
-      if (storedMarket && isMarketKey(storedMarket)) {
+      const storedWatchlist = window.localStorage.getItem(watchlistStorageKey);
+      setWatchlist(parseStoredWatchlist(storedWatchlist));
+      if (storedMarket && isHeatmapUniverse(storedMarket)) {
         setMarket(storedMarket);
       }
       if (storedPeriod && isHeatmapPeriodKey(storedPeriod)) {
@@ -3768,6 +3831,17 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       return;
     }
     try {
+      window.localStorage.setItem(watchlistStorageKey, serializeWatchlist(watchlist));
+    } catch {
+      /* Preferences are optional. */
+    }
+  }, [preferencesReady, watchlist]);
+
+  useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+    try {
       window.sessionStorage.setItem(periodStorageKey, period);
     } catch {
       /* Preferences are optional. */
@@ -3852,8 +3926,34 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     });
   }, []);
 
+  const watchlistCodes = useMemo(() => watchlist.map((item) => item.code), [watchlist]);
+  const isWatchlist = market === watchlistUniverseKey;
+
   const fetchTreemap = useCallback(
-    async (nextMarket: MarketKey, nextPeriod: HeatmapPeriodKey) => {
+    async (nextMarket: HeatmapUniverse, nextPeriod: HeatmapPeriodKey, codes: string[]) => {
+      if (nextMarket === watchlistUniverseKey) {
+        if (codes.length === 0) {
+          setTreemapData(createEmptyWatchlistTreemap(nextPeriod));
+          setQuotes({});
+          setUpdatedAt("");
+          return;
+        }
+
+        const params = new URLSearchParams({
+          period: nextPeriod,
+          codes: codes.join(","),
+        });
+        const response = await fetch(`/api/heatmap/treemap?${params.toString()}`);
+        if (!response.ok) {
+          throw new Error(messages.errorLoad);
+        }
+
+        const payload = (await response.json()) as TreemapResponse;
+        setTreemapData(payload);
+        setUpdatedAt(payload.updatedAt);
+        return;
+      }
+
       const response = await fetch(`/api/heatmap/treemap?market=${nextMarket}&period=${nextPeriod}`);
       if (!response.ok) {
         throw new Error(messages.errorLoad);
@@ -3867,7 +3967,28 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   );
 
   const fetchQuotes = useCallback(
-    async (nextMarket: MarketKey, nextPeriod: HeatmapPeriodKey) => {
+    async (nextMarket: HeatmapUniverse, nextPeriod: HeatmapPeriodKey, codes: string[]) => {
+      if (nextMarket === watchlistUniverseKey) {
+        if (codes.length === 0) {
+          setQuotes({});
+          return;
+        }
+
+        const params = new URLSearchParams({
+          period: nextPeriod,
+          codes: codes.join(","),
+        });
+        const response = await fetch(`/api/heatmap/quotes?${params.toString()}`);
+        if (!response.ok) {
+          throw new Error(messages.errorLoad);
+        }
+
+        const payload = (await response.json()) as { updatedAt: string; quotes: QuoteMap };
+        setQuotes(payload.quotes);
+        setUpdatedAt(payload.updatedAt);
+        return;
+      }
+
       const response = await fetch(`/api/heatmap/quotes?market=${nextMarket}&period=${nextPeriod}`);
       if (!response.ok) {
         throw new Error(messages.errorLoad);
@@ -3990,7 +4111,6 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     let cancelled = false;
 
     async function loadTreemap() {
-      setLoading(true);
       setError(null);
       setHoveredStockCode(null);
       setHoveredBoardName(null);
@@ -4000,8 +4120,18 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       setSelectedBoardName(null);
       setSelectedSubBoardName(null);
 
+      if (market === watchlistUniverseKey && watchlistCodes.length === 0) {
+        setTreemapData(createEmptyWatchlistTreemap(period));
+        setQuotes({});
+        setUpdatedAt("");
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+
       try {
-        await fetchTreemap(market, period);
+        await fetchTreemap(market, period, watchlistCodes);
       } catch {
         if (!cancelled) {
           setError(messages.errorLoad);
@@ -4018,7 +4148,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     return () => {
       cancelled = true;
     };
-  }, [fetchTreemap, market, messages.errorLoad, period, preferencesReady]);
+  }, [fetchTreemap, market, messages.errorLoad, period, preferencesReady, watchlistCodes]);
 
   usePollWhileVisible(
     useCallback(async () => {
@@ -4026,11 +4156,11 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         return;
       }
       try {
-        await fetchQuotes(market, period);
+        await fetchQuotes(market, period, watchlistCodes);
       } catch {
         setError(messages.errorLoad);
       }
-    }, [fetchQuotes, market, messages.errorLoad, period, preferencesReady]),
+    }, [fetchQuotes, market, messages.errorLoad, period, preferencesReady, watchlistCodes]),
     refreshIntervalMs
   );
 
@@ -4132,6 +4262,51 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     clearFilterHoverTimers();
     setFiltersOpen(false);
   }, [clearFilterHoverTimers]);
+
+  const openWatchlistSettings = useCallback(() => {
+    setFiltersOpen(false);
+    setSettingsTab("watchlist");
+    setSettingsOpen(true);
+  }, []);
+
+  const addWatchlistItem = useCallback(
+    (item: WatchlistItem) => {
+      if (watchlist.some((stock) => stock.code === item.code)) {
+        toast.message(messages.watchlistAlreadyAdded, { id: "heatmap-watchlist" });
+        return false;
+      }
+      if (watchlist.length >= watchlistMaxCount) {
+        toast.error(messages.watchlistMaxReached.replace("{count}", String(watchlistMaxCount)), {
+          id: "heatmap-watchlist",
+        });
+        return false;
+      }
+
+      setWatchlist((current) => [...current, item]);
+      if (watchlist.length === 0) {
+        setMarket(watchlistUniverseKey);
+      }
+      toast.success(messages.watchlistAddSuccess.replace("{name}", item.name), { id: "heatmap-watchlist" });
+      return true;
+    },
+    [messages.watchlistAddSuccess, messages.watchlistAlreadyAdded, messages.watchlistMaxReached, watchlist]
+  );
+
+  const removeWatchlistItem = useCallback(
+    (code: string) => {
+      const item = watchlist.find((stock) => stock.code === code);
+      setWatchlist((current) => current.filter((stock) => stock.code !== code));
+      if (item) {
+        toast.success(messages.watchlistRemoveSuccess.replace("{name}", item.name), { id: "heatmap-watchlist" });
+      }
+    },
+    [messages.watchlistRemoveSuccess, watchlist]
+  );
+
+  const clearWatchlist = useCallback(() => {
+    setWatchlist([]);
+    toast.success(messages.watchlistClearSuccess, { id: "heatmap-watchlist" });
+  }, [messages.watchlistClearSuccess]);
 
   const handleFilterHoverEnter = useCallback(() => {
     if (!isDesktopHoverFilterMode) {
@@ -5946,6 +6121,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   ]);
 
   const lastUpdatedText = updatedAt ? new Date(updatedAt).toLocaleTimeString() : "--:--:--";
+  const watchlistChangePct =
+    isWatchlist && treemapData && treemapData.stockCount > 0 ? treemapData.summary.indexChangePct : undefined;
 
   return (
     <div
@@ -6036,6 +6213,59 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                 </span>
               </div>
               <div className={cn("space-y-1", isEnglish && "space-y-0.5")}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (watchlist.length === 0) {
+                      openWatchlistSettings();
+                      if (isMobile) {
+                        setSidebarOpen(false);
+                      }
+                      return;
+                    }
+                    setMarket(watchlistUniverseKey);
+                    if (isMobile) {
+                      setSidebarOpen(false);
+                    }
+                  }}
+                  className={cn(
+                    "flex w-full min-w-0 items-center justify-between border px-1.5 py-1.5 text-left transition-colors",
+                    isEnglish && "px-1.5 py-1",
+                    isWatchlist
+                      ? "border-brand/55 bg-brand/12 text-foreground"
+                      : "border-border bg-background hover:bg-muted"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "flex min-w-0 items-center gap-1 pr-2 leading-tight",
+                      isEnglish ? "text-[10.5px]" : "text-[12px]"
+                    )}
+                  >
+                    <Star className={cn("size-3 shrink-0", isWatchlist ? "fill-current" : "text-muted-foreground")} />
+                    <span className="min-w-0 truncate">{getCompactMarketLabel(messages, watchlistUniverseKey, locale)}</span>
+                  </span>
+                  <span
+                    className={cn(
+                      "shrink-0 font-semibold tabular-nums",
+                      isEnglish ? "text-[10.5px]" : "text-[12px]"
+                    )}
+                    style={{
+                      color: getChangeTextColor(
+                        activeHeatTheme,
+                        watchlistChangePct ?? 0,
+                        priceColorMode,
+                        displayMode
+                      ),
+                    }}
+                  >
+                    {typeof watchlistChangePct === "number" && Number.isFinite(watchlistChangePct)
+                      ? formatCompactChange(watchlistChangePct)
+                      : watchlist.length > 0
+                        ? String(watchlist.length)
+                        : "--"}
+                  </span>
+                </button>
                 {marketOptions.map((option) => {
                   const summary = marketSummaries[option];
                   const isActive = market === option;
@@ -6548,7 +6778,25 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
               </div>
             )}
 
-            {!loading && !error && visibleTreemapData && visibleTreemapData.stockCount === 0 && (
+            {!loading && !error && isWatchlist && watchlist.length === 0 && (
+              <div className="absolute inset-0 z-30 flex items-center justify-center bg-background/78 px-4 backdrop-blur-sm">
+                <div className="max-w-sm border border-border bg-card/95 px-5 py-6 text-center shadow-[0_18px_48px_rgba(0,0,0,0.18)]">
+                  <Star className="mx-auto size-6 text-muted-foreground" />
+                  <h3 className="mt-3 text-sm font-semibold text-foreground">{messages.watchlistEmptyTitle}</h3>
+                  <p className="mt-1.5 text-[12px] leading-5 text-muted-foreground">{messages.watchlistEmptyHint}</p>
+                  <button
+                    type="button"
+                    onClick={openWatchlistSettings}
+                    className="mt-4 inline-flex h-8 items-center justify-center gap-1.5 border border-brand/55 bg-brand/14 px-3 text-[12px] font-semibold text-foreground transition-colors hover:bg-brand/22"
+                  >
+                    <Plus className="size-3.5" />
+                    {messages.watchlistAdd}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!loading && !error && visibleTreemapData && visibleTreemapData.stockCount === 0 && !(isWatchlist && watchlist.length === 0) && (
               <div className="absolute inset-0 z-30 flex items-center justify-center bg-background/70 px-4 text-center text-sm text-muted-foreground backdrop-blur-sm">
                 {messages.changeRangeEmpty}
               </div>
@@ -6810,6 +7058,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         customHeatThemes={customHeatThemes}
         activeHeatTheme={activeHeatTheme}
         shortcutBindings={shortcutBindings}
+        watchlist={watchlist}
         areaTipMessage={areaTipMessage}
         onClose={() => setSettingsOpen(false)}
         onTabChange={setSettingsTab}
@@ -6822,6 +7071,9 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         onCustomHeatThemesChange={setCustomHeatThemes}
         onShortcutBindingsChange={setShortcutBindings}
         onShortcutRecordingChange={setShortcutRecording}
+        onWatchlistAdd={addWatchlistItem}
+        onWatchlistRemove={removeWatchlistItem}
+        onWatchlistClear={clearWatchlist}
       />
 
       {sharePreview && (

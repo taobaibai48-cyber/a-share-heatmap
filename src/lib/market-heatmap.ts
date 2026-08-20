@@ -10,6 +10,12 @@ export const marketKeys = ["all", "sse", "szse", "hs300", "zza50", "zza500", "ma
 
 export type MarketKey = (typeof marketKeys)[number];
 
+export const watchlistUniverseKey = "watchlist" as const;
+
+export type HeatmapUniverse = MarketKey | typeof watchlistUniverseKey;
+
+export const watchlistMaxCount = 80;
+
 export const metricKeys = ["1", "2", "3", "4", "5", "6"] as const;
 
 export type MetricKey = (typeof metricKeys)[number];
@@ -479,6 +485,15 @@ const {
   zza500Set: baselineZza500Set,
 } = buildDynamicIndexSets(baselineStocks);
 const baselineStockCodeSet = new Set(baselineStocks.map((stock) => stock.code));
+const baselineStockByCode = new Map(baselineStocks.map((stock) => [stock.code, stock]));
+const baselineStocksBySymbol = new Map<string, StockSnapshot[]>();
+
+for (const stock of baselineStocks) {
+  const symbol = stock.code.split(".")[0];
+  const list = baselineStocksBySymbol.get(symbol) ?? [];
+  list.push(stock);
+  baselineStocksBySymbol.set(symbol, list);
+}
 const staticStocksByMarket: Record<Exclude<MarketKey, "zza50">, StockSnapshot[]> = {
   all: baselineStocks,
   sse: baselineStocks.filter((stock) =>
@@ -1425,6 +1440,227 @@ function getFallbackSnapshot() {
   }));
 }
 
+function getFallbackQuoteDataFromStocks(
+  stocks: StockSnapshot[],
+  period: HeatmapPeriodKey,
+  metric?: MetricKey
+): QuotesResponse {
+  const quotes: Record<string, QuoteValue> = {};
+
+  for (const stock of stocks) {
+    quotes[stock.code] = {
+      price: stock.price,
+      changePct: stock.changePct,
+      turnoverAmount: getStockTurnoverAmount(stock) || estimateFallbackTurnoverAmount(stock),
+    };
+  }
+
+  return {
+    market: "all",
+    period,
+    metric,
+    updatedAt: fallbackSnapshotSeed.updatedAt,
+    quotes,
+    source: "fallback",
+  };
+}
+
+function getFallbackTreemapDataFromStocks(
+  stocks: StockSnapshot[],
+  period: HeatmapPeriodKey
+): TreemapResponse {
+  const snapshot = stocks.map((stock) => ({
+    ...stock,
+    turnoverAmount: getStockTurnoverAmount(stock) || estimateFallbackTurnoverAmount(stock),
+  }));
+  const nodes = buildNodesFromStocks(snapshot, {}, period);
+
+  return {
+    market: "all",
+    period,
+    updatedAt: fallbackSnapshotSeed.updatedAt,
+    stockCount: snapshot.length,
+    boardCount: nodes.length,
+    summary: {
+      ...summarizeStocks(snapshot, {}, period),
+      indexChangePct: weightedChangePct(snapshot, {}, period),
+    },
+    nodes,
+    source: "fallback",
+  };
+}
+
+export function isMarketKey(value: string): value is MarketKey {
+  return marketKeys.includes(value as MarketKey);
+}
+
+export function isHeatmapUniverse(value: string): value is HeatmapUniverse {
+  return value === watchlistUniverseKey || isMarketKey(value);
+}
+
+export function isMetricKey(value: string): value is MetricKey {
+  return metricKeys.includes(value as MetricKey);
+}
+
+export function isHeatmapPeriodKey(value: string): value is HeatmapPeriodKey {
+  return heatmapPeriodKeys.includes(value as HeatmapPeriodKey);
+}
+
+export type StockSearchItem = {
+  code: string;
+  name: string;
+  boardName: string;
+  subBoardName: string;
+  exchange: ExchangeCode;
+};
+
+function normalizeStockToken(raw: string) {
+  return raw.trim().toUpperCase().replace(/[\s_-]+/g, "");
+}
+
+export function parseStockCodeList(raw: string | null | undefined, maxCount = watchlistMaxCount) {
+  if (!raw) {
+    return [];
+  }
+
+  const tokens = raw
+    .split(/[,;|\s]+/)
+    .map((token) => normalizeStockToken(token))
+    .filter(Boolean);
+
+  return tokens.slice(0, maxCount);
+}
+
+function rankStockSearchMatch(stock: StockSnapshot, query: string, token: string) {
+  const symbol = stock.code.split(".")[0];
+  const codeUpper = stock.code.toUpperCase();
+  const sinaSymbol = `${stock.exchange}${symbol}`;
+  const name = stock.name;
+
+  if (codeUpper === token || symbol === token || sinaSymbol === token) {
+    return 1;
+  }
+
+  if (token.length >= 3 && /^\d+$/.test(token) && symbol.startsWith(token)) {
+    return 2;
+  }
+
+  if (name === query) {
+    return 3;
+  }
+
+  if (name.startsWith(query)) {
+    return 4;
+  }
+
+  if (query.length >= 1 && name.includes(query)) {
+    return 5;
+  }
+
+  return 0;
+}
+
+export function searchStocks(query: string, limit = 12): StockSearchItem[] {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  const token = normalizeStockToken(trimmed);
+  const matches: Array<{ stock: StockSnapshot; rank: number }> = [];
+
+  for (const stock of baselineStocks) {
+    const rank = rankStockSearchMatch(stock, trimmed, token);
+    if (rank > 0) {
+      matches.push({ stock, rank });
+    }
+  }
+
+  matches.sort((left, right) => {
+    if (left.rank !== right.rank) {
+      return left.rank - right.rank;
+    }
+
+    return getStockValue(right.stock) - getStockValue(left.stock);
+  });
+
+  const unique = new Map<string, StockSnapshot>();
+  for (const match of matches) {
+    if (!unique.has(match.stock.code)) {
+      unique.set(match.stock.code, match.stock);
+    }
+    if (unique.size >= limit) {
+      break;
+    }
+  }
+
+  return Array.from(unique.values()).map((stock) => ({
+    code: stock.code,
+    name: stock.name,
+    boardName: stock.boardName,
+    subBoardName: stock.subBoardName,
+    exchange: stock.exchange,
+  }));
+}
+
+export function resolveStocksByCodes(rawCodes: string[]) {
+  const resolved: StockSnapshot[] = [];
+  const seen = new Set<string>();
+
+  for (const raw of rawCodes) {
+    const token = normalizeStockToken(raw);
+    if (!token) {
+      continue;
+    }
+
+    let matches: StockSnapshot[] = [];
+    const dotted = token.match(/^(\d{6})\.(SH|SZ|BJ)$/);
+    const prefixed = token.match(/^(SH|SZ|BJ)(\d{6})$/);
+
+    if (dotted) {
+      const stock = baselineStockByCode.get(`${dotted[1]}.${dotted[2]}`);
+      if (stock) {
+        matches = [stock];
+      }
+    } else if (prefixed) {
+      const stock = baselineStockByCode.get(`${prefixed[2]}.${prefixed[1]}`);
+      if (stock) {
+        matches = [stock];
+      }
+    } else if (/^\d{6}$/.test(token)) {
+      matches = baselineStocksBySymbol.get(token) ?? [];
+    } else {
+      const stock = baselineStockByCode.get(token);
+      if (stock) {
+        matches = [stock];
+      }
+    }
+
+    for (const stock of matches) {
+      if (seen.has(stock.code)) {
+        continue;
+      }
+      seen.add(stock.code);
+      resolved.push(stock);
+      if (resolved.length >= watchlistMaxCount) {
+        return resolved;
+      }
+    }
+  }
+
+  return resolved;
+}
+
+async function getFallbackQuoteData(
+  market: MarketKey,
+  period: HeatmapPeriodKey,
+  metric?: MetricKey
+): Promise<QuotesResponse> {
+  const snapshot = getFallbackSnapshot();
+  const marketStocks = await filterStocks(snapshot, market);
+  return getFallbackQuoteDataFromStocks(marketStocks, period, metric);
+}
+
 async function getFallbackTreemapData(
   market: MarketKey,
   period: HeatmapPeriodKey,
@@ -1448,45 +1684,6 @@ async function getFallbackTreemapData(
     nodes,
     source: "fallback",
   };
-}
-
-async function getFallbackQuoteData(
-  market: MarketKey,
-  period: HeatmapPeriodKey,
-  metric?: MetricKey
-): Promise<QuotesResponse> {
-  const snapshot = getFallbackSnapshot();
-  const marketStocks = await filterStocks(snapshot, market);
-  const quotes: Record<string, QuoteValue> = {};
-
-  for (const stock of marketStocks) {
-    quotes[stock.code] = {
-      price: stock.price,
-      changePct: stock.changePct,
-      turnoverAmount: getStockTurnoverAmount(stock) || estimateFallbackTurnoverAmount(stock),
-    };
-  }
-
-  return {
-    market,
-    period,
-    metric,
-    updatedAt: fallbackSnapshotSeed.updatedAt,
-    quotes,
-    source: "fallback",
-  };
-}
-
-export function isMarketKey(value: string): value is MarketKey {
-  return marketKeys.includes(value as MarketKey);
-}
-
-export function isMetricKey(value: string): value is MetricKey {
-  return metricKeys.includes(value as MetricKey);
-}
-
-export function isHeatmapPeriodKey(value: string): value is HeatmapPeriodKey {
-  return heatmapPeriodKeys.includes(value as HeatmapPeriodKey);
 }
 
 export async function getMarketConstituentStatus(options?: {
@@ -1597,6 +1794,87 @@ export async function getQuoteData(
 
   return {
     market,
+    period,
+    metric,
+    updatedAt: quoteResult[0].value.updatedAt,
+    quotes,
+    source: "direct",
+  };
+}
+
+export async function getTreemapDataByCodes(
+  rawCodes: string[],
+  period: HeatmapPeriodKey = "day"
+): Promise<TreemapResponse> {
+  const stocks = resolveStocksByCodes(rawCodes);
+  const quoteResult = await Promise.allSettled([getQuoteSnapshot()]);
+
+  if (quoteResult[0].status !== "fulfilled") {
+    if (!hasLoggedFallbackWarning) {
+      console.warn("Falling back to bundled watchlist heatmap snapshot:", {
+        quotes: quoteResult[0].reason,
+      });
+      hasLoggedFallbackWarning = true;
+    }
+
+    return getFallbackTreemapDataFromStocks(stocks, period);
+  }
+
+  hasLoggedFallbackWarning = false;
+
+  const liveQuotes = quoteResult[0].value.quotes;
+  const nodes = buildNodesFromStocks(stocks, liveQuotes, period);
+  const computedSummary = summarizeStocks(stocks, liveQuotes, period);
+
+  return {
+    market: "all",
+    period,
+    updatedAt: quoteResult[0].value.updatedAt,
+    stockCount: stocks.length,
+    boardCount: nodes.length,
+    summary: {
+      ...computedSummary,
+      indexChangePct: weightedChangePct(stocks, liveQuotes, period),
+    },
+    nodes,
+    source: "direct",
+  };
+}
+
+export async function getQuoteDataByCodes(
+  rawCodes: string[],
+  period: HeatmapPeriodKey = "day",
+  metric?: MetricKey
+): Promise<QuotesResponse> {
+  const stocks = resolveStocksByCodes(rawCodes);
+  const quoteResult = await Promise.allSettled([getQuoteSnapshot()]);
+
+  if (quoteResult[0].status !== "fulfilled") {
+    if (!hasLoggedFallbackWarning) {
+      console.warn("Falling back to bundled watchlist heatmap quotes:", {
+        quotes: quoteResult[0].reason,
+      });
+      hasLoggedFallbackWarning = true;
+    }
+
+    return getFallbackQuoteDataFromStocks(stocks, period, metric);
+  }
+
+  hasLoggedFallbackWarning = false;
+
+  const quotes: Record<string, QuoteValue> = {};
+
+  for (const stock of stocks) {
+    const quote = quoteResult[0].value.quotes[stock.code];
+    quotes[stock.code] = {
+      price: quote?.price ?? stock.price,
+      changePct: getChangeForPeriod(quote?.changes, period, stock.changePct),
+      turnoverAmount: quote?.turnoverAmount ?? getStockTurnoverAmount(stock),
+    };
+  }
+
+  return {
+    market: "all",
     period,
     metric,
     updatedAt: quoteResult[0].value.updatedAt,
