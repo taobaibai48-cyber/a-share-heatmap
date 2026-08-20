@@ -16,6 +16,8 @@ import {
 import {
   Camera,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   Download,
   ExternalLink,
@@ -3499,6 +3501,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   const [hoveredBoardTitleName, setHoveredBoardTitleName] = useState<string | null>(null);
   const [hoveredSubBoardName, setHoveredSubBoardName] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(false);
   const [selectedStockCode, setSelectedStockCode] = useState<string | null>(null);
   const [inspectorSortKey, setInspectorSortKey] = useState<InspectorSortKey>("changeDesc");
   const [selectedBoardName, setSelectedBoardName] = useState<string | null>(null);
@@ -5910,7 +5913,11 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
           toggleFilters();
           break;
         case "sidebar":
-          setSidebarOpen((current) => !current);
+          if (isMobile) {
+            setSidebarOpen((current) => !current);
+          } else {
+            setDesktopSidebarCollapsed((current) => !current);
+          }
           break;
         case "displayMode":
           setDisplayMode((current) => (current === "dark" ? "light" : "dark"));
@@ -5927,6 +5934,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     createSharePreview,
     filtersOpen,
     isFullscreen,
+    isMobile,
     resetView,
     settingsOpen,
     sharePending,
@@ -5953,7 +5961,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
           isFullscreen ? "h-full" : "min-h-0 flex-1",
           isFullscreen
             ? "grid-cols-[1fr]"
-            : "grid-cols-[1fr] grid-rows-[minmax(0,1fr)_auto] md:grid-cols-[148px_minmax(0,1fr)] lg:grid-cols-[162px_minmax(0,1fr)]"
+            : "grid-cols-[1fr] grid-rows-[minmax(0,1fr)_auto] md:grid-cols-[auto_minmax(0,1fr)]"
         )}
       >
         {!isFullscreen && sidebarOpen && (
@@ -5968,39 +5976,50 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         {!isFullscreen && (
           <aside
             className={cn(
-              "row-start-1 flex min-h-0 min-w-0 flex-col border-r border-border bg-card/95 text-card-foreground",
-              "fixed inset-y-0 left-0 z-50 w-[280px] transform shadow-2xl transition-transform duration-300",
+              "row-start-1 min-h-0 min-w-0 border-r border-border bg-card/95 text-card-foreground",
+              "fixed inset-y-0 left-0 z-50 w-[280px] transform shadow-2xl transition-transform duration-300 ease-out",
               sidebarOpen ? "translate-x-0" : "-translate-x-full",
-              "md:static md:z-auto md:row-span-2 md:w-auto md:translate-x-0 md:shadow-none md:transition-none"
+              "md:static md:z-auto md:row-span-2 md:translate-x-0 md:overflow-hidden md:shadow-none",
+              "md:transition-[width,opacity,border-color] md:duration-[320ms] md:ease-[cubic-bezier(0.22,1,0.36,1)]",
+              desktopSidebarCollapsed
+                ? "md:pointer-events-none md:w-0 md:border-transparent md:opacity-0"
+                : "md:w-[148px] md:opacity-100 lg:w-[162px]"
             )}
-            aria-hidden={!sidebarOpen && isMobile}
+            aria-hidden={(!sidebarOpen && isMobile) || (!isMobile && desktopSidebarCollapsed)}
           >
-            <div className={cn("flex items-center justify-between gap-2 border-b border-border px-2 py-1.5 sm:px-2.5", isEnglish && "py-1")}>
-              <div className="flex min-w-0 items-center gap-2">
-                <img
-                  src="/icon.svg"
-                  alt=""
-                  className="size-7 shrink-0"
-                  decoding="async"
-                />
-                <h2
-                  className={cn(
-                    "min-w-0 truncate whitespace-nowrap font-semibold leading-tight tracking-[0.01em]",
-                    isEnglish ? "text-[12px] sm:text-[13px]" : "text-[13px] sm:text-sm"
-                  )}
+            <div
+              className={cn(
+                "flex h-full min-h-0 w-full flex-col",
+                "md:w-[148px] lg:w-[162px]",
+                desktopSidebarCollapsed && "md:pointer-events-none"
+              )}
+            >
+              <div className={cn("flex items-center justify-between gap-2 border-b border-border px-2 py-1.5 sm:px-2.5", isEnglish && "py-1")}>
+                <div className="flex min-w-0 items-center gap-2">
+                  <img
+                    src="/icon.svg"
+                    alt=""
+                    className="size-7 shrink-0"
+                    decoding="async"
+                  />
+                  <h2
+                    className={cn(
+                      "min-w-0 truncate whitespace-nowrap font-semibold leading-tight tracking-[0.01em]",
+                      isEnglish ? "text-[12px] sm:text-[13px]" : "text-[13px] sm:text-sm"
+                    )}
+                  >
+                    {messages.title}
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSidebarOpen(false)}
+                  aria-label={messages.collapseSidebar}
+                  className="inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-background/70 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
                 >
-                  {messages.title}
-                </h2>
+                  <X className="size-4" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setSidebarOpen(false)}
-                aria-label={messages.collapseSidebar}
-                className="inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-background/70 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
-              >
-                <X className="size-4" />
-              </button>
-            </div>
 
             <div
               className={cn(
@@ -6312,6 +6331,16 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                 <Settings2 className={cn(isEnglish ? "mr-1.5 size-3.5" : "mr-2 size-4")} />
                 {messages.settingsTitle}
               </Button>
+              <button
+                type="button"
+                onClick={() => setDesktopSidebarCollapsed(true)}
+                aria-label={messages.collapseSidebar}
+                title={withShortcutTitle(messages.collapseSidebar, shortcutBindings.sidebar)}
+                className="hidden h-8 items-center justify-center border border-border bg-background/80 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:inline-flex"
+              >
+                <ChevronLeft className="size-4" />
+              </button>
+            </div>
             </div>
           </aside>
         )}
@@ -6536,20 +6565,28 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
           >
             <div className="flex items-center gap-1.5 sm:gap-3">
               <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
-                {!sidebarOpen && (
+                {(!sidebarOpen || desktopSidebarCollapsed) && (
                   <button
                     type="button"
-                    onClick={() => setSidebarOpen(true)}
+                    onClick={() => {
+                      if (isMobile) {
+                        setSidebarOpen(true);
+                        return;
+                      }
+                      setDesktopSidebarCollapsed(false);
+                    }}
                     aria-label={messages.expandSidebar}
                     title={withShortcutTitle(messages.expandSidebar, shortcutBindings.sidebar)}
                     className={cn(
-                      "inline-flex size-7 items-center justify-center bg-transparent transition-colors hover:text-brand focus-visible:text-brand md:hidden",
+                      "inline-flex size-7 items-center justify-center bg-transparent transition-colors hover:text-brand focus-visible:text-brand",
+                      !desktopSidebarCollapsed && "md:hidden",
+                      desktopSidebarCollapsed && "md:inline-flex",
                       isLightMode
                         ? "text-muted-foreground hover:bg-muted focus-visible:bg-muted"
                         : "text-slate-400 hover:bg-white/5 focus-visible:bg-white/5"
                     )}
                   >
-                    <Menu className="size-3.5" />
+                    {isMobile ? <Menu className="size-3.5" /> : <ChevronRight className="size-3.5" />}
                   </button>
                 )}
                 <button
@@ -6727,7 +6764,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       <FilterPopover
         open={filtersOpen}
         triggerRefs={filterTriggerRefs}
-        layoutKey={`${sidebarOpen}:${isFullscreen}:${isMobile}`}
+        layoutKey={`${sidebarOpen}:${desktopSidebarCollapsed}:${isFullscreen}:${isMobile}`}
         onMouseEnter={handleFilterHoverEnter}
         onMouseLeave={handleFilterHoverLeave}
       >
