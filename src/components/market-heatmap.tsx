@@ -32,6 +32,7 @@ import {
   Minimize2,
   Moon,
   Palette,
+  Pencil,
   Plus,
   RotateCcw,
   Settings2,
@@ -6213,59 +6214,6 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                 </span>
               </div>
               <div className={cn("space-y-1", isEnglish && "space-y-0.5")}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (watchlist.length === 0) {
-                      openWatchlistSettings();
-                      if (isMobile) {
-                        setSidebarOpen(false);
-                      }
-                      return;
-                    }
-                    setMarket(watchlistUniverseKey);
-                    if (isMobile) {
-                      setSidebarOpen(false);
-                    }
-                  }}
-                  className={cn(
-                    "flex w-full min-w-0 items-center justify-between border px-1.5 py-1.5 text-left transition-colors",
-                    isEnglish && "px-1.5 py-1",
-                    isWatchlist
-                      ? "border-brand/55 bg-brand/12 text-foreground"
-                      : "border-border bg-background hover:bg-muted"
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "flex min-w-0 items-center gap-1 pr-2 leading-tight",
-                      isEnglish ? "text-[10.5px]" : "text-[12px]"
-                    )}
-                  >
-                    <Star className={cn("size-3 shrink-0", isWatchlist ? "fill-current" : "text-muted-foreground")} />
-                    <span className="min-w-0 truncate">{getCompactMarketLabel(messages, watchlistUniverseKey, locale)}</span>
-                  </span>
-                  <span
-                    className={cn(
-                      "shrink-0 font-semibold tabular-nums",
-                      isEnglish ? "text-[10.5px]" : "text-[12px]"
-                    )}
-                    style={{
-                      color: getChangeTextColor(
-                        activeHeatTheme,
-                        watchlistChangePct ?? 0,
-                        priceColorMode,
-                        displayMode
-                      ),
-                    }}
-                  >
-                    {typeof watchlistChangePct === "number" && Number.isFinite(watchlistChangePct)
-                      ? formatCompactChange(watchlistChangePct)
-                      : watchlist.length > 0
-                        ? String(watchlist.length)
-                        : "--"}
-                  </span>
-                </button>
                 {marketOptions.map((option) => {
                   const summary = marketSummaries[option];
                   const isActive = market === option;
@@ -6315,6 +6263,58 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                     </button>
                   );
                 })}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (watchlist.length === 0) {
+                      openWatchlistSettings();
+                      if (isMobile) {
+                        setSidebarOpen(false);
+                      }
+                      return;
+                    }
+                    setMarket(watchlistUniverseKey);
+                    if (isMobile) {
+                      setSidebarOpen(false);
+                    }
+                  }}
+                  className={cn(
+                    "flex w-full min-w-0 items-center justify-between border px-1.5 py-1.5 text-left transition-colors",
+                    isEnglish && "px-1.5 py-1",
+                    isWatchlist
+                      ? "border-brand/55 bg-brand/12 text-foreground"
+                      : "border-border bg-background hover:bg-muted"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "min-w-0 pr-2 leading-tight",
+                      isEnglish ? "text-[10.5px]" : "text-[12px]"
+                    )}
+                  >
+                    {getCompactMarketLabel(messages, watchlistUniverseKey, locale)}
+                  </span>
+                  <span
+                    className={cn(
+                      "shrink-0 font-semibold tabular-nums",
+                      isEnglish ? "text-[10.5px]" : "text-[12px]"
+                    )}
+                    style={{
+                      color: getChangeTextColor(
+                        activeHeatTheme,
+                        watchlistChangePct ?? 0,
+                        priceColorMode,
+                        displayMode
+                      ),
+                    }}
+                  >
+                    {typeof watchlistChangePct === "number" && Number.isFinite(watchlistChangePct)
+                      ? formatCompactChange(watchlistChangePct)
+                      : watchlist.length > 0
+                        ? String(watchlist.length)
+                        : "--"}
+                  </span>
+                </button>
               </div>
 
               <button
@@ -6544,6 +6544,25 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
               >
                 <Maximize2 className={cn(isEnglish ? "mr-1.5 size-3.5" : "mr-2 size-4")} />
                 {messages.enterFullscreen}
+              </Button>
+              <Button
+                variant="outline"
+                size={isEnglish ? "xs" : "sm"}
+                className={cn(
+                  "justify-start rounded-none border-border bg-background/80 text-foreground hover:bg-muted",
+                  isEnglish && "min-w-0 px-2 text-[10.5px]",
+                  settingsOpen && settingsTab === "watchlist" && "border-brand/55 bg-brand/12"
+                )}
+                onClick={() => {
+                  openWatchlistSettings();
+                  if (isMobile) {
+                    setSidebarOpen(false);
+                  }
+                }}
+                title={messages.watchlistManage}
+              >
+                <Pencil className={cn(isEnglish ? "mr-1.5 size-3.5" : "mr-2 size-4")} />
+                {messages.watchlistManage}
               </Button>
               <Button
                 variant="outline"
