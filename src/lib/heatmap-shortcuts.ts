@@ -5,6 +5,7 @@ export const shortcutActionIds = [
   "settings",
   "sidebar",
   "displayMode",
+  "filters",
 ] as const;
 
 export type ShortcutActionId = (typeof shortcutActionIds)[number];
@@ -18,6 +19,7 @@ export const defaultShortcutBindings: ShortcutBindings = {
   settings: ",",
   sidebar: "b",
   displayMode: "d",
+  filters: "l",
 };
 
 export const shortcutStorageKey = "heatmap-shortcuts";

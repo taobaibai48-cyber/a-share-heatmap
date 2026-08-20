@@ -9,17 +9,19 @@ import {
   useState,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+  type RefObject,
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import {
   Camera,
   Check,
-  ChevronDown,
   Copy,
   Download,
   ExternalLink,
   Info,
   Keyboard,
+  ListFilter,
   Loader2,
   Mail,
   Menu,
@@ -188,6 +190,7 @@ type ScreenshotPreview = {
 type PriceColorMode = "red-rise" | "green-rise";
 type ThemeColorKey = "green" | "red" | "blue" | "violet";
 type DisplayMode = "dark" | "light";
+type FilterOpenMode = "click" | "hover";
 type SettingsTab = "appearance" | "shortcuts" | "help" | "project";
 type HeatmapSizeMode = "marketCap" | "turnover";
 
@@ -202,6 +205,29 @@ const marketStorageKey = "heatmap-market";
 const periodStorageKey = "heatmap-period";
 const boardFilterStorageKey = "heatmap-board-filter";
 const trendFilterStorageKey = "heatmap-trend-filter";
+const changeRangeFilterStorageKey = "heatmap-change-range-filter";
+const filterOpenModeStorageKey = "heatmap-filter-open-mode";
+const filterHoverOpenDelayMs = 180;
+const filterHoverCloseDelayMs = 160;
+const changeRangeSliderMin = -20;
+const changeRangeSliderMax = 20;
+const changeRangeSliderStep = 1;
+const changeRangeSliderTicks = [-20, -10, 0, 10, 20] as const;
+const changeRangeSpanPresets = [
+  { min: -3, max: 3, label: "±3%" },
+  { min: -5, max: 5, label: "±5%" },
+  { min: 0, max: 5, label: "0~5%" },
+  { min: 5, max: 10, label: "5~10%" },
+  { min: -5, max: 0, label: "-5~0%" },
+  { min: -10, max: -5, label: "-10~-5%" },
+] as const;
+
+type ChangeRangeFilter = {
+  min: number | null;
+  max: number | null;
+};
+
+const emptyChangeRangeFilter: ChangeRangeFilter = { min: null, max: null };
 
 function parseStoredBoardFilter(raw: string | null): string[] {
   if (!raw || raw === allBoardsValue) {
@@ -248,6 +274,116 @@ function toggleBoardInFilter(current: string[], boardName: string) {
   }
 
   return [...current, boardName];
+}
+
+function changeRangeFiltersEqual(left: ChangeRangeFilter, right: ChangeRangeFilter) {
+  return left.min === right.min && left.max === right.max;
+}
+
+function isChangeRangeActive(range: ChangeRangeFilter) {
+  return range.min !== null || range.max !== null;
+}
+
+function formatChangeRangeSummary(range: ChangeRangeFilter) {
+  if (range.min !== null && range.max !== null) {
+    return `${range.min}% ~ ${range.max}%`;
+  }
+
+  if (range.min !== null) {
+    return `≥${range.min}%`;
+  }
+
+  if (range.max !== null) {
+    return `≤${range.max}%`;
+  }
+
+  return "";
+}
+
+function countActiveViewFilters(
+  boardFilter: string[],
+  trendFilter: string,
+  changeRangeFilter: ChangeRangeFilter
+) {
+  return (
+    (boardFilter.length > 0 ? 1 : 0) +
+    (trendFilter !== allTrendsValue ? 1 : 0) +
+    (isChangeRangeActive(changeRangeFilter) ? 1 : 0)
+  );
+}
+
+function formatChangeRangeInput(value: number | null) {
+  return value === null ? "" : String(value);
+}
+
+function parseChangeRangeInput(raw: string, fallback: number | null) {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeChangeRangeFilter(range: ChangeRangeFilter): ChangeRangeFilter {
+  if (range.min !== null && range.max !== null && range.min > range.max) {
+    return { min: range.max, max: range.min };
+  }
+
+  return range;
+}
+
+function parseStoredChangeRangeFilter(raw: string | null): ChangeRangeFilter {
+  if (!raw) {
+    return emptyChangeRangeFilter;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return emptyChangeRangeFilter;
+    }
+
+    const record = parsed as { min?: unknown; max?: unknown };
+    const min = typeof record.min === "number" && Number.isFinite(record.min) ? record.min : null;
+    const max = typeof record.max === "number" && Number.isFinite(record.max) ? record.max : null;
+    return normalizeChangeRangeFilter({ min, max });
+  } catch {
+    return emptyChangeRangeFilter;
+  }
+}
+
+function snapChangeRangeValue(value: number) {
+  const snapped = Math.round(value / changeRangeSliderStep) * changeRangeSliderStep;
+  return Math.min(changeRangeSliderMax, Math.max(changeRangeSliderMin, snapped));
+}
+
+function filterToSliderBounds(range: ChangeRangeFilter) {
+  return {
+    min: range.min === null ? changeRangeSliderMin : snapChangeRangeValue(range.min),
+    max: range.max === null ? changeRangeSliderMax : snapChangeRangeValue(range.max),
+  };
+}
+
+function formatChangeRangeBound(value: number) {
+  if (value > 0) {
+    return `+${value}%`;
+  }
+
+  return `${value}%`;
+}
+
+function matchesChangeRange(changePct: number, range: ChangeRangeFilter) {
+  if (range.min !== null && changePct < range.min) {
+    return false;
+  }
+
+  if (range.max !== null && changePct > range.max) {
+    return false;
+  }
+
+  return true;
 }
 const colorLegendSteps = [-4, -3, -2, -1, 0, 1, 2, 3, 4] as const;
 const legendTicks = [-4, -2, 0, 2, 4] as const;
@@ -431,6 +567,67 @@ function getLiveTurnoverAmount(code: string, fallback: number, quotes: QuoteMap)
   }
 
   return fallback;
+}
+
+function filterTreemapByStockPredicate(
+  data: TreemapResponse,
+  quotes: QuoteMap,
+  predicate: (changePct: number) => boolean
+): TreemapResponse {
+  const filteredNodes = data.nodes
+    .map((node) => {
+      const filteredChildren = node.children.filter((stock) => {
+        const changePct = quotes[stock.code]?.changePct ?? stock.changePct;
+        return predicate(changePct);
+      });
+
+      return {
+        ...node,
+        children: filteredChildren,
+        stockCount: filteredChildren.length,
+        value: filteredChildren.reduce((sum, stock) => sum + stock.value, 0),
+      };
+    })
+    .filter((node) => node.children.length > 0);
+
+  let advanceCount = 0;
+  let flatCount = 0;
+  let declineCount = 0;
+  let turnoverAmount = 0;
+  let totalStockCount = 0;
+
+  for (const node of filteredNodes) {
+    for (const stock of node.children) {
+      const changePct = quotes[stock.code]?.changePct ?? stock.changePct;
+
+      if (changePct > flatThreshold) {
+        advanceCount += 1;
+      } else if (changePct < -flatThreshold) {
+        declineCount += 1;
+      } else {
+        flatCount += 1;
+      }
+
+      turnoverAmount += getLiveTurnoverAmount(stock.code, stock.turnoverAmount, quotes);
+      totalStockCount += 1;
+    }
+  }
+
+  return {
+    ...data,
+    stockCount: totalStockCount,
+    boardCount: filteredNodes.length,
+    summary: {
+      ...data.summary,
+      advanceCount,
+      flatCount,
+      declineCount,
+      turnoverAmount,
+      turnoverPreviousAmount: 0,
+      turnoverDelta: 0,
+    },
+    nodes: filteredNodes,
+  };
 }
 
 function normalizeSizeValue(value: number) {
@@ -763,6 +960,7 @@ function getShortcutActionLabel(messages: HeatmapMessages, action: ShortcutActio
   if (action === "fullscreen") return messages.shortcutActionFullscreen;
   if (action === "settings") return messages.shortcutActionSettings;
   if (action === "sidebar") return messages.shortcutActionSidebar;
+  if (action === "filters") return messages.shortcutActionFilters;
   return messages.shortcutActionDisplayMode;
 }
 
@@ -2100,12 +2298,599 @@ function HeatThemeSettingsPanel({
   );
 }
 
+function ChangeRangeSlider({
+  value,
+  gradient,
+  minAriaLabel,
+  maxAriaLabel,
+  onChange,
+}: {
+  value: ChangeRangeFilter;
+  gradient: string;
+  minAriaLabel: string;
+  maxAriaLabel: string;
+  onChange: (range: ChangeRangeFilter) => void;
+}) {
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const dragThumbRef = useRef<"min" | "max" | null>(null);
+  const valueRef = useRef(value);
+  const onChangeRef = useRef(onChange);
+  valueRef.current = value;
+  onChangeRef.current = onChange;
+
+  const bounds = filterToSliderBounds(value);
+  const span = changeRangeSliderMax - changeRangeSliderMin;
+  const minPercent = ((bounds.min - changeRangeSliderMin) / span) * 100;
+  const maxPercent = ((bounds.max - changeRangeSliderMin) / span) * 100;
+
+  const valueFromClientX = (clientX: number) => {
+    const track = trackRef.current;
+    if (!track) {
+      return changeRangeSliderMin;
+    }
+
+    const rect = track.getBoundingClientRect();
+    if (rect.width <= 0) {
+      return changeRangeSliderMin;
+    }
+
+    const ratio = (clientX - rect.left) / rect.width;
+    return snapChangeRangeValue(changeRangeSliderMin + ratio * span);
+  };
+
+  const applyThumb = (thumb: "min" | "max", clientX: number) => {
+    const nextValue = valueFromClientX(clientX);
+    const currentValue = valueRef.current;
+    const current = {
+      min: currentValue.min ?? changeRangeSliderMin,
+      max: currentValue.max ?? changeRangeSliderMax,
+    };
+
+    if (thumb === "min") {
+      onChangeRef.current({ min: Math.min(nextValue, current.max), max: current.max });
+      return;
+    }
+
+    onChangeRef.current({ min: current.min, max: Math.max(nextValue, current.min) });
+  };
+
+  const pickThumb = (clientX: number): "min" | "max" => {
+    const nextValue = valueFromClientX(clientX);
+    return Math.abs(nextValue - bounds.min) <= Math.abs(nextValue - bounds.max) ? "min" : "max";
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <div
+        ref={trackRef}
+        className="relative h-7 cursor-pointer touch-none select-none"
+        onPointerDown={(event) => {
+          if (event.button !== 0) {
+            return;
+          }
+          event.preventDefault();
+          event.currentTarget.setPointerCapture(event.pointerId);
+          const thumb = pickThumb(event.clientX);
+          dragThumbRef.current = thumb;
+          applyThumb(thumb, event.clientX);
+        }}
+        onPointerMove={(event) => {
+          if (!dragThumbRef.current) {
+            return;
+          }
+          applyThumb(dragThumbRef.current, event.clientX);
+        }}
+        onPointerUp={() => {
+          dragThumbRef.current = null;
+        }}
+        onPointerCancel={() => {
+          dragThumbRef.current = null;
+        }}
+      >
+        <div
+          className="pointer-events-none absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2"
+          style={{ background: gradient }}
+        />
+        <div
+          className="pointer-events-none absolute top-1/2 h-1.5 -translate-y-1/2 bg-background/75"
+          style={{ left: 0, width: `${minPercent}%` }}
+        />
+        <div
+          className="pointer-events-none absolute top-1/2 h-1.5 -translate-y-1/2 bg-background/75"
+          style={{ left: `${maxPercent}%`, right: 0 }}
+        />
+        <button
+          type="button"
+          aria-label={minAriaLabel}
+          aria-valuemin={changeRangeSliderMin}
+          aria-valuemax={bounds.max}
+          aria-valuenow={bounds.min}
+          role="slider"
+          tabIndex={0}
+          className="pointer-events-none absolute top-1/2 size-4 -translate-x-1/2 -translate-y-1/2 border-2 border-foreground bg-card shadow-[0_1px_4px_rgba(0,0,0,0.28)]"
+          style={{ left: `${minPercent}%` }}
+        />
+        <button
+          type="button"
+          aria-label={maxAriaLabel}
+          aria-valuemin={bounds.min}
+          aria-valuemax={changeRangeSliderMax}
+          aria-valuenow={bounds.max}
+          role="slider"
+          tabIndex={0}
+          className="pointer-events-none absolute top-1/2 size-4 -translate-x-1/2 -translate-y-1/2 border-2 border-foreground bg-card shadow-[0_1px_4px_rgba(0,0,0,0.28)]"
+          style={{ left: `${maxPercent}%` }}
+        />
+      </div>
+      <div className="flex justify-between text-[10px] font-medium tabular-nums text-muted-foreground">
+        {changeRangeSliderTicks.map((tick) => (
+          <span key={tick} className={cn(tick === 0 && "text-foreground")}>
+            {formatChangeRangeBound(tick)}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function filterChipClass(active: boolean) {
+  return cn(
+    "h-8 border px-2 text-center text-[12px] font-semibold leading-tight transition-colors",
+    active
+      ? "border-brand/70 bg-brand/18 text-foreground"
+      : "border-border bg-background/80 text-muted-foreground hover:bg-muted hover:text-foreground"
+  );
+}
+
+function FilterPopover({
+  open,
+  triggerRefs,
+  layoutKey,
+  onMouseEnter,
+  onMouseLeave,
+  children,
+}: {
+  open: boolean;
+  triggerRefs: Array<RefObject<HTMLButtonElement | null>>;
+  layoutKey: string;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
+  children: ReactNode;
+}) {
+  const [style, setStyle] = useState<CSSProperties>({
+    position: "fixed",
+    left: 12,
+    top: 12,
+    width: 340,
+    zIndex: 80,
+  });
+
+  useLayoutEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const update = () => {
+      const trigger = triggerRefs
+        .map((item) => item.current)
+        .find((node) => {
+          if (!node) {
+            return false;
+          }
+          const rect = node.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        });
+      const width = Math.min(340, window.innerWidth - 16);
+      let left = 12;
+      let top = 12;
+
+      if (trigger) {
+        const rect = trigger.getBoundingClientRect();
+        left = rect.right + 8;
+        top = rect.top;
+        if (left + width > window.innerWidth - 8) {
+          left = Math.max(8, rect.left);
+          top = rect.bottom + 8;
+        }
+      }
+
+      const maxHeight = window.innerHeight - 16;
+      if (top + maxHeight > window.innerHeight - 8) {
+        top = Math.max(8, window.innerHeight - maxHeight - 8);
+      }
+
+      setStyle({
+        position: "fixed",
+        left,
+        top,
+        width,
+        zIndex: 80,
+      });
+    };
+
+    update();
+    const frame = window.requestAnimationFrame(update);
+    const timer = window.setTimeout(update, 320);
+    window.addEventListener("resize", update);
+    document.addEventListener("scroll", update, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+      window.removeEventListener("resize", update);
+      document.removeEventListener("scroll", update, true);
+    };
+  }, [layoutKey, open, triggerRefs]);
+
+  if (!open || typeof document === "undefined") {
+    return null;
+  }
+
+  return createPortal(
+    <div style={style} className="max-h-[calc(100vh-16px)]" onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave}>
+      {children}
+    </div>,
+    document.body
+  );
+}
+
+function FilterPanel({
+  messages,
+  locale,
+  shortcutLabel,
+  boards,
+  boardFilter,
+  trendFilter,
+  changeRangeFilter,
+  changeRangeMinInput,
+  changeRangeMaxInput,
+  sizeMode,
+  period,
+  legendGradient,
+  activeFilterCount,
+  onClose,
+  onToggleBoard,
+  onClearBoardFilter,
+  onTrendFilterChange,
+  onChangeRangeMinInputChange,
+  onChangeRangeMaxInputChange,
+  onCommitChangeRange,
+  onChangeRange,
+  onClearChangeRange,
+  onSizeModeChange,
+  onPeriodChange,
+  onResetFilters,
+}: {
+  messages: HeatmapMessages;
+  locale: Locale;
+  shortcutLabel: string;
+  boards: Array<{ code: string; name: string; stockCount: number }>;
+  boardFilter: string[];
+  trendFilter: string;
+  changeRangeFilter: ChangeRangeFilter;
+  changeRangeMinInput: string;
+  changeRangeMaxInput: string;
+  sizeMode: HeatmapSizeMode;
+  period: HeatmapPeriodKey;
+  legendGradient: string;
+  activeFilterCount: number;
+  onClose: () => void;
+  onToggleBoard: (boardName: string) => void;
+  onClearBoardFilter: () => void;
+  onTrendFilterChange: (value: string) => void;
+  onChangeRangeMinInputChange: (value: string) => void;
+  onChangeRangeMaxInputChange: (value: string) => void;
+  onCommitChangeRange: () => void;
+  onChangeRange: (range: ChangeRangeFilter) => void;
+  onClearChangeRange: () => void;
+  onSizeModeChange: (mode: HeatmapSizeMode) => void;
+  onPeriodChange: (next: HeatmapPeriodKey) => void;
+  onResetFilters: () => void;
+}) {
+  const panelRef = useRef<HTMLElement | null>(null);
+  const isAllBoardsSelected = boardFilter.length === 0;
+  const selectedBoardCountLabel = messages.selectedBoardCount.replace("{count}", String(boardFilter.length));
+
+  useEffect(() => {
+    function onPointerDown(event: PointerEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target) {
+        return;
+      }
+      if (panelRef.current?.contains(target) || target.closest("[data-heatmap-filter-trigger]")) {
+        return;
+      }
+      onClose();
+    }
+
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [onClose]);
+
+  return (
+    <section
+      ref={panelRef}
+      role="dialog"
+      aria-labelledby="heatmap-filters-title"
+      className="flex max-h-[calc(100vh-16px)] w-full flex-col overflow-hidden border border-border bg-card/96 text-card-foreground shadow-[0_18px_48px_rgba(0,0,0,0.28)] backdrop-blur-sm"
+    >
+      <header className="flex items-center justify-between gap-2 border-b border-border px-2.5 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <ListFilter className="size-3.5 shrink-0 text-muted-foreground" />
+          <h2 id="heatmap-filters-title" className="text-[13px] font-semibold leading-none">
+            {messages.filtersTitle}
+          </h2>
+          <span className="font-mono text-[10px] font-semibold text-muted-foreground">{shortcutLabel}</span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {activeFilterCount > 0 && (
+            <button
+              type="button"
+              onClick={onResetFilters}
+              className="px-1.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              {messages.filtersReset}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={messages.closeSheet}
+            className="inline-flex size-7 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+      </header>
+
+      <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto p-2.5">
+        <section>
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <h3 className="text-[11px] font-semibold text-muted-foreground">{messages.boardFilterLabel}</h3>
+            {!isAllBoardsSelected && (
+              <button
+                type="button"
+                onClick={onClearBoardFilter}
+                className="text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {messages.clearBoardFilter}
+              </button>
+            )}
+          </div>
+          <div className="overflow-hidden border border-border">
+            <button
+              type="button"
+              onClick={onClearBoardFilter}
+              className={cn(
+                "flex h-8 w-full items-center px-2.5 text-left text-[12px] font-semibold transition-colors",
+                isAllBoardsSelected
+                  ? "bg-brand/18 text-foreground"
+                  : "bg-background/70 text-muted-foreground hover:bg-muted hover:text-foreground"
+              )}
+            >
+              {isAllBoardsSelected ? messages.allBoards : selectedBoardCountLabel}
+            </button>
+            <div className="max-h-40 overflow-y-auto overscroll-contain border-t border-border">
+              {boards.map((board) => {
+                const isSelected = boardFilter.includes(board.name);
+                return (
+                  <button
+                    key={board.code}
+                    type="button"
+                    onClick={() => onToggleBoard(board.name)}
+                    className={cn(
+                      "flex h-8 w-full min-w-0 items-center gap-2 px-2.5 text-left transition-colors",
+                      isSelected ? "bg-brand/12 text-foreground" : "text-foreground hover:bg-muted"
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "inline-flex size-3.5 shrink-0 items-center justify-center border",
+                        isSelected
+                          ? "border-brand bg-brand text-brand-foreground"
+                          : "border-border bg-background"
+                      )}
+                      aria-hidden
+                    >
+                      {isSelected ? <Check className="size-2.5" strokeWidth={3} /> : null}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-[12px] leading-tight">{board.name}</span>
+                    <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                      {board.stockCount}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <h3 className="text-[11px] font-semibold text-muted-foreground">{messages.metricLabel}</h3>
+            <span className="text-[11px] font-medium tabular-nums text-muted-foreground">
+              {getPeriodLabel(messages, period)}
+            </span>
+          </div>
+          <div className="grid grid-cols-4 gap-1">
+            {periodOptions.map((option) => {
+              const isActive = period === option;
+              return (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => onPeriodChange(option)}
+                  title={getPeriodLabel(messages, option)}
+                  aria-pressed={isActive}
+                  className={filterChipClass(isActive)}
+                >
+                  {getCompactPeriodLabel(option, locale)}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        <section>
+          <h3 className="mb-1.5 text-[11px] font-semibold text-muted-foreground">{messages.trendFilterLabel}</h3>
+          <div className="grid grid-cols-3 gap-1">
+            <button
+              type="button"
+              onClick={() => onTrendFilterChange(allTrendsValue)}
+              aria-pressed={trendFilter === allTrendsValue}
+              className={filterChipClass(trendFilter === allTrendsValue)}
+            >
+              {messages.allTrends}
+            </button>
+            <button
+              type="button"
+              onClick={() => onTrendFilterChange(risingOnlyValue)}
+              aria-pressed={trendFilter === risingOnlyValue}
+              className={filterChipClass(trendFilter === risingOnlyValue)}
+            >
+              {messages.risingOnly}
+            </button>
+            <button
+              type="button"
+              onClick={() => onTrendFilterChange(fallingOnlyValue)}
+              aria-pressed={trendFilter === fallingOnlyValue}
+              className={filterChipClass(trendFilter === fallingOnlyValue)}
+            >
+              {messages.fallingOnly}
+            </button>
+          </div>
+        </section>
+
+        <section>
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <h3 className="text-[11px] font-semibold text-muted-foreground">{messages.changeRangeFilterLabel}</h3>
+            {isChangeRangeActive(changeRangeFilter) && (
+              <button
+                type="button"
+                onClick={onClearChangeRange}
+                className="text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {messages.clearChangeRangeFilter}
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="relative min-w-0 flex-1">
+              <input
+                id="filter-change-range-min"
+                type="text"
+                inputMode="decimal"
+                autoComplete="off"
+                spellCheck={false}
+                value={changeRangeMinInput}
+                placeholder={messages.changeRangeUnbounded}
+                aria-label={messages.changeRangeMinPlaceholder}
+                onChange={(event) => onChangeRangeMinInputChange(event.target.value)}
+                onBlur={onCommitChangeRange}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.currentTarget.blur();
+                  }
+                }}
+                className="h-8 w-full border border-border bg-background/80 py-0 pl-2 pr-6 text-[12px] font-semibold tabular-nums text-foreground outline-none transition-colors placeholder:font-medium placeholder:text-muted-foreground/65 focus:border-brand/60"
+              />
+              <span className="pointer-events-none absolute inset-y-0 right-1.5 flex items-center text-[10px] font-semibold text-muted-foreground">
+                %
+              </span>
+            </div>
+            <span className="shrink-0 text-[11px] text-muted-foreground">~</span>
+            <div className="relative min-w-0 flex-1">
+              <input
+                id="filter-change-range-max"
+                type="text"
+                inputMode="decimal"
+                autoComplete="off"
+                spellCheck={false}
+                value={changeRangeMaxInput}
+                placeholder={messages.changeRangeUnbounded}
+                aria-label={messages.changeRangeMaxPlaceholder}
+                onChange={(event) => onChangeRangeMaxInputChange(event.target.value)}
+                onBlur={onCommitChangeRange}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.currentTarget.blur();
+                  }
+                }}
+                className="h-8 w-full border border-border bg-background/80 py-0 pl-2 pr-6 text-[12px] font-semibold tabular-nums text-foreground outline-none transition-colors placeholder:font-medium placeholder:text-muted-foreground/65 focus:border-brand/60"
+              />
+              <span className="pointer-events-none absolute inset-y-0 right-1.5 flex items-center text-[10px] font-semibold text-muted-foreground">
+                %
+              </span>
+            </div>
+          </div>
+          <div className="mt-2">
+            <ChangeRangeSlider
+              value={changeRangeFilter}
+              gradient={legendGradient}
+              minAriaLabel={messages.changeRangeMinPlaceholder}
+              maxAriaLabel={messages.changeRangeMaxPlaceholder}
+              onChange={onChangeRange}
+            />
+          </div>
+          <div className="mt-2 grid grid-cols-3 gap-1">
+            {changeRangeSpanPresets.map((preset) => {
+              const isActive = changeRangeFiltersEqual(changeRangeFilter, preset);
+              return (
+                <button
+                  key={preset.label}
+                  type="button"
+                  aria-pressed={isActive}
+                  onClick={() =>
+                    onChangeRange(isActive ? emptyChangeRangeFilter : { min: preset.min, max: preset.max })
+                  }
+                  className={cn(
+                    "h-7 border text-[11px] font-semibold tabular-nums transition-colors",
+                    isActive
+                      ? "border-brand/70 bg-brand/18 text-foreground"
+                      : "border-border bg-background/80 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                >
+                  {preset.label}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        <section>
+          <h3 className="mb-1.5 text-[11px] font-semibold text-muted-foreground">{messages.sizeModeLabel}</h3>
+          <div className="grid grid-cols-2 gap-1">
+            <button
+              type="button"
+              onClick={() => onSizeModeChange("marketCap")}
+              aria-pressed={sizeMode === "marketCap"}
+              className={filterChipClass(sizeMode === "marketCap")}
+            >
+              {messages.sizeModeMarketCap}
+            </button>
+            <button
+              type="button"
+              onClick={() => onSizeModeChange("turnover")}
+              aria-pressed={sizeMode === "turnover"}
+              className={filterChipClass(sizeMode === "turnover")}
+            >
+              {messages.sizeModeTurnover}
+            </button>
+          </div>
+        </section>
+      </div>
+    </section>
+  );
+}
+
 function SettingsDrawer({
   open,
   tab,
   messages,
   locale,
   displayMode,
+  filterOpenMode,
   themeColor,
   priceColorMode,
   heatThemeId,
@@ -2116,6 +2901,7 @@ function SettingsDrawer({
   onTabChange,
   onLocaleChange,
   onDisplayModeChange,
+  onFilterOpenModeChange,
   onThemeColorChange,
   onPriceColorModeChange,
   onHeatThemeIdChange,
@@ -2129,6 +2915,7 @@ function SettingsDrawer({
   messages: HeatmapMessages;
   locale: Locale;
   displayMode: DisplayMode;
+  filterOpenMode: FilterOpenMode;
   themeColor: ThemeColorKey;
   priceColorMode: PriceColorMode;
   heatThemeId: string;
@@ -2140,6 +2927,7 @@ function SettingsDrawer({
   onTabChange: (tab: SettingsTab) => void;
   onLocaleChange: (locale: Locale) => void;
   onDisplayModeChange: (mode: DisplayMode) => void;
+  onFilterOpenModeChange: (mode: FilterOpenMode) => void;
   onThemeColorChange: (theme: ThemeColorKey) => void;
   onPriceColorModeChange: (mode: PriceColorMode) => void;
   onHeatThemeIdChange: (id: string) => void;
@@ -2361,6 +3149,43 @@ function SettingsDrawer({
                     </button>
                   </div>
                 </section>
+
+                {!isMobile && (
+                  <section>
+                    <h3 className="text-sm font-semibold">{messages.filterOpenModeLabel}</h3>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      {messages.filterOpenModeDescription}
+                    </p>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onFilterOpenModeChange("click")}
+                        aria-pressed={filterOpenMode === "click"}
+                        className={cn(
+                          "border px-3 py-2 text-left text-sm font-semibold transition-colors md:py-3",
+                          filterOpenMode === "click"
+                            ? "border-brand/70 bg-brand/15 text-foreground"
+                            : "border-border bg-background/70 text-muted-foreground hover:bg-muted hover:text-foreground"
+                        )}
+                      >
+                        {messages.filterOpenModeClick}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onFilterOpenModeChange("hover")}
+                        aria-pressed={filterOpenMode === "hover"}
+                        className={cn(
+                          "border px-3 py-2 text-left text-sm font-semibold transition-colors md:py-3",
+                          filterOpenMode === "hover"
+                            ? "border-brand/70 bg-brand/15 text-foreground"
+                            : "border-border bg-background/70 text-muted-foreground hover:bg-muted hover:text-foreground"
+                        )}
+                      >
+                        {messages.filterOpenModeHover}
+                      </button>
+                    </div>
+                  </section>
+                )}
 
                 <section>
                   <h3 className="text-sm font-semibold">{messages.themeColor}</h3>
@@ -2635,11 +3460,13 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   const messages = useMemo(() => getMessages(locale).heatmap, [locale]);
   const [preferencesReady, setPreferencesReady] = useState(false);
   const [displayMode, setDisplayMode] = useState<DisplayMode>("dark");
+  const [filterOpenMode, setFilterOpenMode] = useState<FilterOpenMode>("click");
   const [themeColor, setThemeColor] = useState<ThemeColorKey>("red");
   const [priceColorMode, setPriceColorMode] = useState<PriceColorMode>("red-rise");
   const [heatThemeId, setHeatThemeId] = useState(defaultHeatThemeId);
   const [customHeatThemes, setCustomHeatThemes] = useState<HeatTheme[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("appearance");
   const [shortcutBindings, setShortcutBindings] = useState<ShortcutBindings>(() => ({
     ...defaultShortcutBindings,
@@ -2648,9 +3475,10 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   const [market, setMarket] = useState<MarketKey>("all");
   const [period, setPeriod] = useState<HeatmapPeriodKey>("day");
   const [boardFilter, setBoardFilter] = useState<string[]>([]);
-  const [boardFilterMenuOpen, setBoardFilterMenuOpen] = useState(false);
-  const [boardFilterMenuStyle, setBoardFilterMenuStyle] = useState<CSSProperties | null>(null);
   const [trendFilter, setTrendFilter] = useState(allTrendsValue);
+  const [changeRangeFilter, setChangeRangeFilter] = useState<ChangeRangeFilter>(emptyChangeRangeFilter);
+  const [changeRangeMinInput, setChangeRangeMinInput] = useState("");
+  const [changeRangeMaxInput, setChangeRangeMaxInput] = useState("");
   const [sizeMode, setSizeMode] = useState<HeatmapSizeMode>("marketCap");
   const [marketSummaries, setMarketSummaries] = useState<Partial<Record<MarketKey, MarketSummary>>>({});
   const [treemapData, setTreemapData] = useState<TreemapResponse | null>(null);
@@ -2678,12 +3506,23 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   const isEnglish = locale === "en";
   const isLightMode = displayMode === "light";
   const isMobile = useIsMobile();
+  const isDesktopHoverFilterMode = !isMobile && filterOpenMode === "hover";
   const activeHeatTheme = useMemo(
     () => resolveHeatTheme(heatThemeId, customHeatThemes),
     [customHeatThemes, heatThemeId]
   );
   const legendGradient = useMemo(
     () => getLegendGradient(activeHeatTheme, priceColorMode, displayMode),
+    [activeHeatTheme, displayMode, priceColorMode]
+  );
+  const changeRangeSliderGradient = useMemo(
+    () =>
+      legendGradientFromTheme(
+        activeHeatTheme,
+        priceColorMode === "red-rise",
+        displayMode,
+        [-20, -10, -4, 0, 4, 10, 20]
+      ),
     [activeHeatTheme, displayMode, priceColorMode]
   );
   const heatmapCanvasTheme = heatmapCanvasThemes[displayMode];
@@ -2705,8 +3544,10 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   const lastStockRectsRef = useRef<StockRect[]>([]);
   const lastBoardRectsRef = useRef<BoardRect[]>([]);
   const lastSubBoardRectsRef = useRef<SubBoardRect[]>([]);
-  const boardFilterTriggerRef = useRef<HTMLDivElement | null>(null);
-  const boardFilterListRef = useRef<HTMLDivElement | null>(null);
+  const sidebarFilterTriggerRef = useRef<HTMLButtonElement>(null);
+  const filterTriggerRefs = useMemo(() => [sidebarFilterTriggerRef], []);
+  const filterHoverOpenTimerRef = useRef<number | null>(null);
+  const filterHoverCloseTimerRef = useRef<number | null>(null);
   const dragStateRef = useRef({
     active: false,
     pointerX: 0,
@@ -2762,11 +3603,13 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       const storedDisplayMode = window.localStorage.getItem("heatmap-display-mode");
       const storedTheme = window.localStorage.getItem("heatmap-theme-color");
       const storedPriceColor = window.localStorage.getItem("heatmap-price-color");
+      const storedFilterOpenMode = window.localStorage.getItem(filterOpenModeStorageKey);
       const storedSizeMode = window.localStorage.getItem("heatmap-size-mode");
       const storedMarket = window.sessionStorage.getItem(marketStorageKey);
       const storedPeriod = window.sessionStorage.getItem(periodStorageKey);
       const storedBoardFilter = window.sessionStorage.getItem(boardFilterStorageKey);
       const storedTrendFilter = window.sessionStorage.getItem(trendFilterStorageKey);
+      const storedChangeRangeFilter = window.sessionStorage.getItem(changeRangeFilterStorageKey);
       const storedShortcuts = window.localStorage.getItem(shortcutStorageKey);
       const storedHeatThemeId = window.localStorage.getItem(heatThemeStorageKey);
       const storedCustomHeatThemes = window.localStorage.getItem(customHeatThemesStorageKey);
@@ -2783,6 +3626,9 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       }
       if (storedPriceColor === "red-rise" || storedPriceColor === "green-rise") {
         setPriceColorMode(storedPriceColor);
+      }
+      if (storedFilterOpenMode === "click" || storedFilterOpenMode === "hover") {
+        setFilterOpenMode(storedFilterOpenMode);
       }
       if (storedSizeMode === "marketCap" || storedSizeMode === "turnover") {
         setSizeMode(storedSizeMode);
@@ -2802,6 +3648,12 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         storedTrendFilter === fallingOnlyValue
       ) {
         setTrendFilter(storedTrendFilter);
+      }
+      if (storedChangeRangeFilter) {
+        const parsedChangeRange = parseStoredChangeRangeFilter(storedChangeRangeFilter);
+        setChangeRangeFilter(parsedChangeRange);
+        setChangeRangeMinInput(formatChangeRangeInput(parsedChangeRange.min));
+        setChangeRangeMaxInput(formatChangeRangeInput(parsedChangeRange.max));
       }
       setShortcutBindings(parseStoredShortcuts(storedShortcuts));
       let customThemes = parseStoredCustomHeatThemes(storedCustomHeatThemes);
@@ -2880,6 +3732,17 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       return;
     }
     try {
+      window.localStorage.setItem(filterOpenModeStorageKey, filterOpenMode);
+    } catch {
+      /* Preferences are optional. */
+    }
+  }, [filterOpenMode, preferencesReady]);
+
+  useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+    try {
       window.localStorage.setItem("heatmap-size-mode", sizeMode);
     } catch {
       /* Preferences are optional. */
@@ -2929,6 +3792,17 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       /* Preferences are optional. */
     }
   }, [preferencesReady, trendFilter]);
+
+  useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+    try {
+      window.sessionStorage.setItem(changeRangeFilterStorageKey, JSON.stringify(changeRangeFilter));
+    } catch {
+      /* Preferences are optional. */
+    }
+  }, [changeRangeFilter, preferencesReady]);
 
   useEffect(() => {
     if (!preferencesReady) {
@@ -3201,85 +4075,135 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     setView({ scale: 1, x: 0, y: 0 });
   }, [sizeMode]);
 
-  useEffect(() => {
-    if (!boardFilterMenuOpen) {
-      return;
-    }
+  const applyChangeRange = useCallback((next: ChangeRangeFilter) => {
+    const normalized = normalizeChangeRangeFilter(next);
+    setChangeRangeFilter(normalized);
+    setChangeRangeMinInput(formatChangeRangeInput(normalized.min));
+    setChangeRangeMaxInput(formatChangeRangeInput(normalized.max));
+  }, []);
 
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (
-        boardFilterTriggerRef.current?.contains(target) ||
-        boardFilterListRef.current?.contains(target)
-      ) {
-        return;
-      }
-
-      setBoardFilterMenuOpen(false);
-    };
-
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-    };
-  }, [boardFilterMenuOpen]);
-
-  useLayoutEffect(() => {
-    if (!boardFilterMenuOpen) {
-      setBoardFilterMenuStyle(null);
-      return;
-    }
-
-    const updatePosition = () => {
-      const trigger = boardFilterTriggerRef.current;
-      if (!trigger) {
-        return;
-      }
-
-      const rect = trigger.getBoundingClientRect();
-      const viewportHeight = window.innerHeight;
-      const gap = 4;
-      const padding = 8;
-      const spaceBelow = viewportHeight - rect.bottom - padding;
-      const spaceAbove = rect.top - padding;
-      const openUpward = spaceBelow < 168 && spaceAbove > spaceBelow;
-      const maxHeight = Math.max(120, Math.min(280, (openUpward ? spaceAbove : spaceBelow) - gap));
-
-      setBoardFilterMenuStyle({
-        position: "fixed",
-        left: rect.left,
-        width: rect.width,
-        zIndex: 80,
-        maxHeight,
-        ...(openUpward
-          ? { bottom: viewportHeight - rect.top + gap, top: "auto" }
-          : { top: rect.bottom + gap, bottom: "auto" }),
+  const commitChangeRangeInputs = useCallback(
+    (minRaw = changeRangeMinInput, maxRaw = changeRangeMaxInput) => {
+      applyChangeRange({
+        min: parseChangeRangeInput(minRaw, changeRangeFilter.min),
+        max: parseChangeRangeInput(maxRaw, changeRangeFilter.max),
       });
-    };
+    },
+    [applyChangeRange, changeRangeFilter.max, changeRangeFilter.min, changeRangeMaxInput, changeRangeMinInput]
+  );
 
-    updatePosition();
-    window.addEventListener("resize", updatePosition);
-    document.addEventListener("scroll", updatePosition, true);
-    return () => {
-      window.removeEventListener("resize", updatePosition);
-      document.removeEventListener("scroll", updatePosition, true);
-    };
-  }, [boardFilterMenuOpen]);
-
-  useEffect(() => {
-    if (isFullscreen || (isMobile && !sidebarOpen)) {
-      setBoardFilterMenuOpen(false);
+  const clearFilterHoverTimers = useCallback(() => {
+    if (filterHoverOpenTimerRef.current) {
+      window.clearTimeout(filterHoverOpenTimerRef.current);
+      filterHoverOpenTimerRef.current = null;
     }
-  }, [isFullscreen, isMobile, sidebarOpen]);
+    if (filterHoverCloseTimerRef.current) {
+      window.clearTimeout(filterHoverCloseTimerRef.current);
+      filterHoverCloseTimerRef.current = null;
+    }
+  }, []);
+
+  const openFilters = useCallback(() => {
+    setSettingsOpen(false);
+    if (isMobile) {
+      setSidebarOpen(true);
+    }
+    setFiltersOpen(true);
+  }, [isMobile]);
+
+  const toggleFilters = useCallback(() => {
+    clearFilterHoverTimers();
+    setFiltersOpen((open) => {
+      const next = !open;
+      if (next) {
+        setSettingsOpen(false);
+        if (isMobile) {
+          setSidebarOpen(true);
+        }
+      }
+      return next;
+    });
+  }, [clearFilterHoverTimers, isMobile]);
+
+  const closeFilters = useCallback(() => {
+    clearFilterHoverTimers();
+    setFiltersOpen(false);
+  }, [clearFilterHoverTimers]);
+
+  const handleFilterHoverEnter = useCallback(() => {
+    if (!isDesktopHoverFilterMode) {
+      return;
+    }
+    if (filterHoverCloseTimerRef.current) {
+      window.clearTimeout(filterHoverCloseTimerRef.current);
+      filterHoverCloseTimerRef.current = null;
+    }
+    if (filtersOpen || filterHoverOpenTimerRef.current) {
+      return;
+    }
+    filterHoverOpenTimerRef.current = window.setTimeout(() => {
+      filterHoverOpenTimerRef.current = null;
+      openFilters();
+    }, filterHoverOpenDelayMs);
+  }, [filtersOpen, isDesktopHoverFilterMode, openFilters]);
+
+  const handleFilterHoverLeave = useCallback(() => {
+    if (!isDesktopHoverFilterMode) {
+      return;
+    }
+    if (filterHoverOpenTimerRef.current) {
+      window.clearTimeout(filterHoverOpenTimerRef.current);
+      filterHoverOpenTimerRef.current = null;
+    }
+    if (!filtersOpen) {
+      return;
+    }
+    if (filterHoverCloseTimerRef.current) {
+      window.clearTimeout(filterHoverCloseTimerRef.current);
+    }
+    filterHoverCloseTimerRef.current = window.setTimeout(() => {
+      filterHoverCloseTimerRef.current = null;
+      setFiltersOpen(false);
+    }, filterHoverCloseDelayMs);
+  }, [filtersOpen, isDesktopHoverFilterMode]);
+
+  const resetViewFilters = useCallback(() => {
+    setBoardFilter([]);
+    setTrendFilter(allTrendsValue);
+    applyChangeRange(emptyChangeRangeFilter);
+  }, [applyChangeRange]);
 
   const boardFilterOptions = useMemo(() => treemapData?.nodes ?? [], [treemapData]);
   const isAllBoardsSelected = boardFilter.length === 0;
-  const selectedBoardCountLabel = messages.selectedBoardCount.replace("{count}", String(boardFilter.length));
-  const boardFilterSummary = isAllBoardsSelected
-    ? messages.allBoards
-    : boardFilter.length === 1
-      ? boardFilter[0]
-      : selectedBoardCountLabel;
+  const activeFilterCount = countActiveViewFilters(boardFilter, trendFilter, changeRangeFilter);
+  useEffect(() => clearFilterHoverTimers, [clearFilterHoverTimers]);
+  useEffect(() => {
+    if (!isDesktopHoverFilterMode) {
+      clearFilterHoverTimers();
+    }
+  }, [clearFilterHoverTimers, isDesktopHoverFilterMode]);
+
+  const activeFilterSummary = useMemo(() => {
+    const parts: string[] = [];
+    if (boardFilter.length === 1) {
+      parts.push(boardFilter[0]);
+    } else if (boardFilter.length > 1) {
+      parts.push(messages.selectedBoardCount.replace("{count}", String(boardFilter.length)));
+    }
+
+    if (trendFilter === risingOnlyValue) {
+      parts.push(messages.risingOnly);
+    } else if (trendFilter === fallingOnlyValue) {
+      parts.push(messages.fallingOnly);
+    }
+
+    const rangeSummary = formatChangeRangeSummary(changeRangeFilter);
+    if (rangeSummary) {
+      parts.push(rangeSummary);
+    }
+
+    return parts.join(" · ");
+  }, [boardFilter, changeRangeFilter, messages.fallingOnly, messages.risingOnly, messages.selectedBoardCount, trendFilter]);
 
   const visibleTreemapData = useMemo<TreemapResponse | null>(() => {
     if (!treemapData) {
@@ -3340,70 +4264,34 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         return data;
       }
 
-      const filteredNodes = data.nodes.map((node) => {
-        const filteredChildren = node.children.filter((stock) => {
-          const changePct = quotes[stock.code]?.changePct ?? stock.changePct;
-          if (trendFilter === risingOnlyValue) {
-            return changePct > flatThreshold;
-          }
-          if (trendFilter === fallingOnlyValue) {
-            return changePct < -flatThreshold;
-          }
-          return true;
-        });
-
-        return {
-          ...node,
-          children: filteredChildren,
-          stockCount: filteredChildren.length,
-          value: filteredChildren.reduce((sum, stock) => sum + stock.value, 0),
-        };
-      }).filter((node) => node.children.length > 0);
-
-      let advanceCount = 0;
-      let flatCount = 0;
-      let declineCount = 0;
-      let turnoverAmount = 0;
-      let totalStockCount = 0;
-
-      for (const node of filteredNodes) {
-        for (const stock of node.children) {
-          const changePct = quotes[stock.code]?.changePct ?? stock.changePct;
-
-          if (changePct > flatThreshold) {
-            advanceCount += 1;
-          } else if (changePct < -flatThreshold) {
-            declineCount += 1;
-          } else {
-            flatCount += 1;
-          }
-
-          turnoverAmount += getLiveTurnoverAmount(stock.code, stock.turnoverAmount, quotes);
-          totalStockCount += 1;
+      return filterTreemapByStockPredicate(data, quotes, (changePct) => {
+        if (trendFilter === risingOnlyValue) {
+          return changePct > flatThreshold;
         }
+
+        if (trendFilter === fallingOnlyValue) {
+          return changePct < -flatThreshold;
+        }
+
+        return true;
+      });
+    };
+
+    const applyChangeRangeFilter = (data: TreemapResponse) => {
+      if (!isChangeRangeActive(changeRangeFilter)) {
+        return data;
       }
 
-      return {
-        ...data,
-        stockCount: totalStockCount,
-        boardCount: filteredNodes.length,
-        summary: {
-          ...data.summary,
-          advanceCount,
-          flatCount,
-          declineCount,
-          turnoverAmount,
-          turnoverPreviousAmount: 0,
-          turnoverDelta: 0,
-        },
-        nodes: filteredNodes,
-      };
+      return filterTreemapByStockPredicate(data, quotes, (changePct) =>
+        matchesChangeRange(changePct, changeRangeFilter)
+      );
     };
 
     let result = applyBoardFilter(treemapData);
     result = applyTrendFilter(result);
+    result = applyChangeRangeFilter(result);
     return result;
-  }, [boardFilter, trendFilter, quotes, treemapData]);
+  }, [boardFilter, changeRangeFilter, quotes, trendFilter, treemapData]);
 
   const marketOverview = useMemo<MarketOverview | null>(() => {
     if (!visibleTreemapData) {
@@ -4306,7 +5194,6 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
 
   const clearBoardFilter = useCallback(() => {
     setBoardFilter([]);
-    setBoardFilterMenuOpen(false);
   }, []);
 
   const clearBoardClickTimer = useCallback(() => {
@@ -4946,14 +5833,11 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
 
       const target = event.target as HTMLElement | null;
       const tagName = target?.tagName;
-      if (
+      const typingInField =
         target?.isContentEditable ||
         tagName === "INPUT" ||
         tagName === "TEXTAREA" ||
-        tagName === "SELECT"
-      ) {
-        return;
-      }
+        tagName === "SELECT";
 
       if (event.key === "Escape") {
         if (shortcutRecording) {
@@ -4969,15 +5853,19 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
           setSettingsOpen(false);
           return;
         }
-        if (boardFilterMenuOpen) {
+        if (filtersOpen) {
           event.preventDefault();
-          setBoardFilterMenuOpen(false);
+          setFiltersOpen(false);
           return;
         }
-        if (isFullscreen) {
+        if (isFullscreen && !typingInField) {
           event.preventDefault();
           setIsFullscreen(false);
         }
+        return;
+      }
+
+      if (typingInField) {
         return;
       }
 
@@ -5015,7 +5903,11 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
           toggleFullscreen();
           break;
         case "settings":
+          setFiltersOpen(false);
           setSettingsOpen((current) => !current);
+          break;
+        case "filters":
+          toggleFilters();
           break;
         case "sidebar":
           setSidebarOpen((current) => !current);
@@ -5031,9 +5923,9 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [
-    boardFilterMenuOpen,
     closeSharePreview,
     createSharePreview,
+    filtersOpen,
     isFullscreen,
     resetView,
     settingsOpen,
@@ -5041,6 +5933,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     sharePreview,
     shortcutBindings,
     shortcutRecording,
+    toggleFilters,
     toggleFullscreen,
   ]);
 
@@ -5175,290 +6068,51 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                 })}
               </div>
 
-              <div className={cn("mt-1.5 border border-border bg-muted/18 p-1.5", isEnglish && "mt-1 p-[5px]")}>
-                <p
-                  className={cn(
-                    "font-semibold uppercase tracking-[0.12em] text-muted-foreground",
-                    isEnglish ? "text-[9px]" : "text-[10px]"
-                  )}
-                >
-                  {messages.boardFilterLabel}
-                </p>
-                <div
-                  ref={boardFilterTriggerRef}
-                  className={cn(
-                    "mt-1 flex h-8 w-full min-w-0 items-center border",
-                    isAllBoardsSelected
-                      ? "border-border bg-background/85"
-                      : "border-brand/55 bg-brand/12"
-                  )}
-                >
-                  <button
-                    type="button"
-                    aria-expanded={boardFilterMenuOpen}
-                    aria-haspopup="listbox"
-                    onClick={() => setBoardFilterMenuOpen((open) => !open)}
+              <button
+                type="button"
+                ref={sidebarFilterTriggerRef}
+                onClick={toggleFilters}
+                onMouseEnter={handleFilterHoverEnter}
+                onMouseLeave={handleFilterHoverLeave}
+                data-heatmap-filter-trigger
+                title={withShortcutTitle(messages.filtersOpen, shortcutBindings.filters)}
+                className={cn(
+                  "mt-1.5 flex w-full min-w-0 flex-col items-stretch gap-0.5 border px-1.5 py-1.5 text-left transition-colors",
+                  isEnglish && "mt-1 px-1.5 py-1",
+                  activeFilterCount > 0
+                    ? "border-brand/55 bg-brand/12 text-foreground"
+                    : "border-border bg-muted/18 text-foreground hover:bg-muted"
+                )}
+              >
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <ListFilter className="size-3.5 shrink-0" />
+                  <span
                     className={cn(
-                      "flex h-full min-w-0 flex-1 items-center px-2 text-left font-semibold outline-none transition-colors hover:bg-muted focus:border-brand/70",
+                      "min-w-0 flex-1 truncate font-semibold",
                       isEnglish ? "text-[10.5px]" : "text-[12px]"
                     )}
                   >
-                    <span className="min-w-0 flex-1 truncate">{boardFilterSummary}</span>
-                  </button>
-                  {!isAllBoardsSelected && (
-                    <button
-                      type="button"
-                      aria-label={messages.clearBoardFilter}
-                      title={messages.clearBoardFilter}
-                      onClick={clearBoardFilter}
-                      className="inline-flex size-7 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                    >
-                      <X className="size-3.5" />
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    tabIndex={-1}
-                    aria-hidden
-                    onClick={() => setBoardFilterMenuOpen((open) => !open)}
-                    className="inline-flex size-7 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  >
-                    <ChevronDown
-                      className={cn(
-                        "size-3.5 transition-transform",
-                        boardFilterMenuOpen && "rotate-180"
-                      )}
-                    />
-                  </button>
-                </div>
-                {boardFilterMenuOpen &&
-                  boardFilterMenuStyle &&
-                  createPortal(
-                    <div
-                      ref={boardFilterListRef}
-                      role="listbox"
-                      aria-multiselectable="true"
-                      aria-label={messages.boardFilterLabel}
-                      style={boardFilterMenuStyle}
-                      className="overflow-y-auto overscroll-contain border border-border bg-card py-0.5 shadow-[0_10px_28px_rgba(0,0,0,0.28)]"
-                    >
-                      {isAllBoardsSelected ? (
-                        <button
-                          type="button"
-                          role="option"
-                          aria-selected
-                          onClick={() => setBoardFilterMenuOpen(false)}
-                          className={cn(
-                            "flex h-7 w-full items-center px-2 text-left font-semibold bg-brand/18 text-foreground",
-                            isEnglish ? "text-[10.5px]" : "text-[12px]"
-                          )}
-                        >
-                          {messages.allBoards}
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={clearBoardFilter}
-                          className={cn(
-                            "flex h-7 w-full items-center gap-1.5 border-b border-border px-2 text-left font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
-                            isEnglish ? "text-[10.5px]" : "text-[12px]"
-                          )}
-                        >
-                          <X className="size-3.5 shrink-0" />
-                          {messages.clearBoardFilter}
-                        </button>
-                      )}
-                      {boardFilterOptions.map((board) => {
-                        const isSelected = boardFilter.includes(board.name);
-
-                        return (
-                          <button
-                            key={board.code}
-                            type="button"
-                            role="option"
-                            aria-selected={isSelected}
-                            onClick={() => toggleBoardFilter(board.name)}
-                            className={cn(
-                              "flex h-7 w-full min-w-0 items-center gap-1.5 px-2 text-left transition-colors",
-                              isSelected ? "bg-brand/12 text-foreground" : "text-foreground hover:bg-muted"
-                            )}
-                          >
-                            <span
-                              className={cn(
-                                "inline-flex size-3.5 shrink-0 items-center justify-center border",
-                                isSelected
-                                  ? "border-brand bg-brand text-brand-foreground"
-                                  : "border-border bg-background"
-                              )}
-                              aria-hidden
-                            >
-                              {isSelected ? <Check className="size-2.5" strokeWidth={3} /> : null}
-                            </span>
-                            <span
-                              className={cn(
-                                "min-w-0 flex-1 truncate leading-tight",
-                                isEnglish ? "text-[10.5px]" : "text-[12px]"
-                              )}
-                            >
-                              {board.name}
-                            </span>
-                            <span
-                              className={cn(
-                                "shrink-0 tabular-nums text-muted-foreground",
-                                isEnglish ? "text-[10px]" : "text-[11px]"
-                              )}
-                            >
-                              {board.stockCount}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>,
-                    document.body
-                  )}
-              </div>
-
-              <div className={cn("mt-1.5 border border-border bg-muted/18 p-1.5", isEnglish && "mt-1 p-[5px]")}>
-                <label
-                  htmlFor="trend-filter"
-                  className={cn(
-                    "block font-semibold uppercase tracking-[0.12em] text-muted-foreground",
-                    isEnglish ? "text-[9px]" : "text-[10px]"
-                  )}
-                >
-                  {messages.trendFilterLabel}
-                </label>
-                <div className={cn("mt-1 grid grid-cols-3 gap-1", isEnglish && "gap-0.5")}>
-                  <button
-                    type="button"
-                    onClick={() => setTrendFilter(allTrendsValue)}
-                    aria-pressed={trendFilter === allTrendsValue}
-                    className={cn(
-                      "h-7 border px-1 text-center font-semibold leading-tight transition-colors",
-                      isEnglish ? "text-[9.5px]" : "text-[10.5px]",
-                      trendFilter === allTrendsValue
-                        ? "border-brand/70 bg-brand/18 text-foreground"
-                        : "border-border bg-background/80 text-muted-foreground hover:bg-muted hover:text-foreground"
-                    )}
-                  >
-                    {messages.allTrends}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTrendFilter(risingOnlyValue)}
-                    aria-pressed={trendFilter === risingOnlyValue}
-                    className={cn(
-                      "h-7 border px-1 text-center font-semibold leading-tight transition-colors",
-                      isEnglish ? "text-[9.5px]" : "text-[10.5px]",
-                      trendFilter === risingOnlyValue
-                        ? "border-brand/70 bg-brand/18 text-foreground"
-                        : "border-border bg-background/80 text-muted-foreground hover:bg-muted hover:text-foreground"
-                    )}
-                  >
-                    {messages.risingOnly}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTrendFilter(fallingOnlyValue)}
-                    aria-pressed={trendFilter === fallingOnlyValue}
-                    className={cn(
-                      "h-7 border px-1 text-center font-semibold leading-tight transition-colors",
-                      isEnglish ? "text-[9.5px]" : "text-[10.5px]",
-                      trendFilter === fallingOnlyValue
-                        ? "border-brand/70 bg-brand/18 text-foreground"
-                        : "border-border bg-background/80 text-muted-foreground hover:bg-muted hover:text-foreground"
-                    )}
-                  >
-                    {messages.fallingOnly}
-                  </button>
-                </div>
-              </div>
-
-              <div className={cn("mt-1.5 border border-border bg-muted/18 p-1.5", isEnglish && "mt-1 p-[5px]")}>
-                <p
-                  className={cn(
-                    "font-semibold uppercase tracking-[0.12em] text-muted-foreground",
-                    isEnglish ? "text-[9px]" : "text-[10px]"
-                  )}
-                >
-                  {messages.sizeModeLabel}
-                </p>
-                <div className={cn("mt-1 grid grid-cols-2 gap-1", isEnglish && "gap-0.5")}>
-                  <button
-                    type="button"
-                    onClick={() => setSizeMode("marketCap")}
-                    aria-pressed={sizeMode === "marketCap"}
-                    className={cn(
-                      "h-7 border px-1 text-center font-semibold leading-tight transition-colors",
-                      isEnglish ? "text-[9.5px]" : "text-[10.5px]",
-                      sizeMode === "marketCap"
-                        ? "border-brand/70 bg-brand/18 text-foreground"
-                        : "border-border bg-background/80 text-muted-foreground hover:bg-muted hover:text-foreground"
-                    )}
-                  >
-                    {messages.sizeModeMarketCap}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSizeMode("turnover")}
-                    aria-pressed={sizeMode === "turnover"}
-                    className={cn(
-                      "h-7 border px-1 text-center font-semibold leading-tight transition-colors",
-                      isEnglish ? "text-[9.5px]" : "text-[10.5px]",
-                      sizeMode === "turnover"
-                        ? "border-brand/70 bg-brand/18 text-foreground"
-                        : "border-border bg-background/80 text-muted-foreground hover:bg-muted hover:text-foreground"
-                    )}
-                  >
-                    {messages.sizeModeTurnover}
-                  </button>
-                </div>
-              </div>
-
-              <div className={cn("mt-1.5 border border-border bg-muted/18 p-1.5", isEnglish && "mt-1 p-[5px]")}>
-                <div className="flex items-center justify-between gap-2">
-                  <p
-                    className={cn(
-                      "font-semibold uppercase tracking-[0.12em] text-muted-foreground",
-                      isEnglish ? "text-[9px]" : "text-[10px]"
-                    )}
-                  >
-                    {messages.metricLabel}
-                  </p>
-                  <span
-                    className={cn(
-                      "shrink-0 text-right font-semibold tabular-nums text-foreground",
-                      isEnglish ? "text-[9.5px]" : "text-[10.5px]"
-                    )}
-                  >
-                    {getPeriodLabel(messages, period)}
+                    {messages.filtersTitle}
                   </span>
-                </div>
-                <div className={cn("mt-1 grid grid-cols-4 gap-1", isEnglish && "gap-0.5")}>
-                  {periodOptions.map((option) => {
-                    const isActive = period === option;
-
-                    return (
-                      <button
-                        key={option}
-                        type="button"
-                        onClick={() => setPeriod(option)}
-                        title={getPeriodLabel(messages, option)}
-                        aria-pressed={isActive}
-                        className={cn(
-                          "h-7 border text-center font-semibold tabular-nums transition-colors",
-                          isEnglish ? "text-[10px]" : "text-[12px]",
-                          isActive
-                            ? "border-brand/70 bg-brand/18 text-foreground shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--brand)_22%,transparent)]"
-                            : "border-border bg-background/80 text-muted-foreground hover:bg-muted hover:text-foreground"
-                        )}
-                      >
-                        {getCompactPeriodLabel(option, locale)}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
+                  {activeFilterCount > 0 ? (
+                    <span className="inline-flex h-4 min-w-4 items-center justify-center bg-brand px-1 text-[10px] font-semibold tabular-nums text-brand-foreground">
+                      {activeFilterCount}
+                    </span>
+                  ) : (
+                    <span className="font-mono text-[10px] font-semibold text-muted-foreground">
+                      {formatShortcutLabel(shortcutBindings.filters)}
+                    </span>
+                  )}
+                </span>
+                <span
+                  className={cn(
+                    "truncate text-muted-foreground",
+                    isEnglish ? "text-[9px]" : "text-[10px]"
+                  )}
+                >
+                  {activeFilterSummary || messages.filtersIdleHint}
+                </span>
+              </button>
 
               {marketOverview && (
                 <div className={cn("mt-1.5 border border-border bg-muted/28 p-1.5", isEnglish && "mt-1 p-[5px]")}>
@@ -5649,7 +6303,10 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                   "justify-start rounded-none border-border bg-background/80 text-foreground hover:bg-muted",
                   isEnglish && "min-w-0 px-2 text-[10.5px]"
                 )}
-                onClick={() => setSettingsOpen(true)}
+                onClick={() => {
+                  setFiltersOpen(false);
+                  setSettingsOpen(true);
+                }}
                 title={withShortcutTitle(messages.settingsTitle, shortcutBindings.settings)}
               >
                 <Settings2 className={cn(isEnglish ? "mr-1.5 size-3.5" : "mr-2 size-4")} />
@@ -5861,6 +6518,12 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                 {error}
               </div>
             )}
+
+            {!loading && !error && visibleTreemapData && visibleTreemapData.stockCount === 0 && (
+              <div className="absolute inset-0 z-30 flex items-center justify-center bg-background/70 px-4 text-center text-sm text-muted-foreground backdrop-blur-sm">
+                {messages.changeRangeEmpty}
+              </div>
+            )}
           </div>
         </div>
 
@@ -5972,6 +6635,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                     type="button"
                     aria-label={messages.operationTipsTitle}
                     onClick={() => {
+                      setFiltersOpen(false);
                       setSettingsTab("help");
                       setSettingsOpen(true);
                     }}
@@ -6060,12 +6724,49 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         />
       )}
 
+      <FilterPopover
+        open={filtersOpen}
+        triggerRefs={filterTriggerRefs}
+        layoutKey={`${sidebarOpen}:${isFullscreen}:${isMobile}`}
+        onMouseEnter={handleFilterHoverEnter}
+        onMouseLeave={handleFilterHoverLeave}
+      >
+        <FilterPanel
+          messages={messages}
+          locale={locale}
+          shortcutLabel={formatShortcutLabel(shortcutBindings.filters)}
+          boards={boardFilterOptions}
+          boardFilter={boardFilter}
+          trendFilter={trendFilter}
+          changeRangeFilter={changeRangeFilter}
+          changeRangeMinInput={changeRangeMinInput}
+          changeRangeMaxInput={changeRangeMaxInput}
+          sizeMode={sizeMode}
+          period={period}
+          legendGradient={changeRangeSliderGradient}
+          activeFilterCount={activeFilterCount}
+          onClose={closeFilters}
+          onToggleBoard={toggleBoardFilter}
+          onClearBoardFilter={clearBoardFilter}
+          onTrendFilterChange={setTrendFilter}
+          onChangeRangeMinInputChange={setChangeRangeMinInput}
+          onChangeRangeMaxInputChange={setChangeRangeMaxInput}
+          onCommitChangeRange={commitChangeRangeInputs}
+          onChangeRange={applyChangeRange}
+          onClearChangeRange={() => applyChangeRange(emptyChangeRangeFilter)}
+          onSizeModeChange={setSizeMode}
+          onPeriodChange={setPeriod}
+          onResetFilters={resetViewFilters}
+        />
+      </FilterPopover>
+
       <SettingsDrawer
         open={settingsOpen}
         tab={settingsTab}
         messages={messages}
         locale={locale}
         displayMode={displayMode}
+        filterOpenMode={filterOpenMode}
         themeColor={themeColor}
         priceColorMode={priceColorMode}
         heatThemeId={heatThemeId}
@@ -6077,6 +6778,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         onTabChange={setSettingsTab}
         onLocaleChange={setLocale}
         onDisplayModeChange={setDisplayMode}
+        onFilterOpenModeChange={setFilterOpenMode}
         onThemeColorChange={setThemeColor}
         onPriceColorModeChange={setPriceColorMode}
         onHeatThemeIdChange={setHeatThemeId}
