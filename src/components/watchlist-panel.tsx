@@ -1,11 +1,21 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { Check, Loader2, Plus, Search, X } from "lucide-react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
+import { Check, Loader2, Plus, Search, Sparkles, X } from "lucide-react";
 
+import { WatchlistAiDialog } from "@/components/watchlist-ai-dialog";
 import { cn } from "@/lib/utils";
 import type { HeatmapMessages, Locale } from "@/lib/i18n";
 import type { WatchlistExchange, WatchlistItem } from "@/lib/watchlist";
+import { isWatchlistAiConfigured, loadWatchlistAiConfig } from "@/lib/watchlist-ai";
+import { toast } from "sonner";
 
 type StockSearchItem = {
   code: string;
@@ -101,19 +111,21 @@ export function WatchlistManager({
   const [activeIndex, setActiveIndex] = useState(0);
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [quotes, setQuotes] = useState<QuoteMap>({});
+  const [aiDialogOpen, setAiDialogOpen] = useState(false);
+
   const addedCodes = new Set(items.map((item) => item.code));
   const trimmedQuery = query.trim();
   const showDropdown = dropdownOpen && trimmedQuery.length > 0;
 
   useEffect(() => {
-    if (!active) {
+    if (!active || aiDialogOpen) {
       return;
     }
     const frame = window.requestAnimationFrame(() => {
       inputRef.current?.focus();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [active]);
+  }, [active, aiDialogOpen]);
 
   useEffect(() => {
     if (items.length === 0) {
@@ -276,7 +288,7 @@ export function WatchlistManager({
   }
 
   return (
-    <div ref={rootRef} className="flex min-h-0 flex-1 flex-col gap-4">
+    <div ref={rootRef} className="relative flex min-h-0 flex-1 flex-col gap-4">
       <div className="shrink-0">
         <h3 className="text-sm font-semibold">{messages.markets.watchlist}</h3>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{messages.settingsWatchlistIntro}</p>
@@ -369,6 +381,20 @@ export function WatchlistManager({
           </div>
         )}
       </form>
+
+      <button
+        type="button"
+        onClick={() => {
+          if (!isWatchlistAiConfigured(loadWatchlistAiConfig())) {
+            toast.message(messages.watchlistAiNeedConfigTitle, { id: "watchlist-ai" });
+          }
+          setAiDialogOpen(true);
+        }}
+        className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 border border-dashed border-border bg-muted/10 px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:border-brand/45 hover:bg-brand/8 hover:text-foreground"
+      >
+        <Sparkles className="size-3.5" />
+        {messages.watchlistAiOpen}
+      </button>
 
       <section className="flex min-h-0 flex-1 flex-col">
         <div className="mb-1.5 flex shrink-0 items-center justify-between gap-2">
@@ -471,6 +497,15 @@ export function WatchlistManager({
           {items.length}/{maxCount}
         </p>
       </section>
+
+      <WatchlistAiDialog
+        open={aiDialogOpen}
+        messages={messages}
+        locale={locale}
+        items={items}
+        onAdd={onAdd}
+        onClose={() => setAiDialogOpen(false)}
+      />
     </div>
   );
 }
