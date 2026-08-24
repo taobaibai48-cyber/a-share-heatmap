@@ -23,6 +23,7 @@ import {
   ExternalLink,
   Info,
   Keyboard,
+  LayoutGrid,
   ListFilter,
   Loader2,
   Mail,
@@ -138,6 +139,12 @@ type StockRect = {
   changePct: number;
 };
 
+type BoardTrendStats = {
+  advanceCount: number;
+  flatCount: number;
+  declineCount: number;
+};
+
 type BoardRect = {
   name: string;
   x: number;
@@ -147,6 +154,9 @@ type BoardRect = {
   stockCount: number;
   titleHeight: number;
   changePct: number;
+  advanceCount: number;
+  flatCount: number;
+  declineCount: number;
 };
 
 type SubBoardRect = {
@@ -159,6 +169,9 @@ type SubBoardRect = {
   stockCount: number;
   titleHeight: number;
   changePct: number;
+  advanceCount: number;
+  flatCount: number;
+  declineCount: number;
 };
 
 type TreemapInput<T> = {
@@ -243,6 +256,8 @@ const boardFilterStorageKey = "heatmap-board-filter";
 const trendFilterStorageKey = "heatmap-trend-filter";
 const changeRangeFilterStorageKey = "heatmap-change-range-filter";
 const filterOpenModeStorageKey = "heatmap-filter-open-mode";
+const thumbnailModeStorageKey = "heatmap-thumbnail-mode";
+const headerTrendStatsStorageKey = "heatmap-header-trend-stats";
 const filterHoverOpenDelayMs = 180;
 const filterHoverCloseDelayMs = 160;
 const changeRangeSliderMin = -20;
@@ -539,12 +554,28 @@ function formatCompactChange(value: number) {
   return value > 0 ? `+${text}%` : `${text}%`;
 }
 
-function shortenText(text: string, maxLength: number) {
-  if (text.length <= maxLength) {
-    return text;
+function formatBoardTrendCounts(messages: HeatmapMessages, advanceCount: number, declineCount: number) {
+  return messages.boardTrendCounts.replace("{advance}", String(advanceCount)).replace("{decline}", String(declineCount));
+}
+
+function countStockTrends(stocks: Array<{ code: string; changePct: number }>, quotes: QuoteMap): BoardTrendStats {
+  let advanceCount = 0;
+  let flatCount = 0;
+  let declineCount = 0;
+
+  for (const stock of stocks) {
+    const changePct = quotes[stock.code]?.changePct ?? stock.changePct;
+
+    if (changePct > flatThreshold) {
+      advanceCount += 1;
+    } else if (changePct < -flatThreshold) {
+      declineCount += 1;
+    } else {
+      flatCount += 1;
+    }
   }
 
-  return `${text.slice(0, maxLength)}…`;
+  return { advanceCount, flatCount, declineCount };
 }
 
 function formatCount(value: number, locale: Locale) {
@@ -1353,6 +1384,272 @@ function fitFontSizeToWidth(
   return clamp((preferredSize * maxWidth) / preferredWidth, minSize, preferredSize);
 }
 
+function drawSectorHeaderLabel(
+  context: CanvasRenderingContext2D,
+  rect: { x: number; y: number; width: number; titleHeight: number },
+  options: {
+    name: string;
+    changePct: number;
+    advanceCount: number;
+    declineCount: number;
+    messages: HeatmapMessages;
+    showDrillHint?: boolean;
+    compact?: boolean;
+    showStats?: boolean;
+  }
+) {
+  const { name, changePct, advanceCount, declineCount, messages } = options;
+  const compact = Boolean(options.compact);
+  const showDrillHint = Boolean(options.showDrillHint);
+  const showStats = Boolean(options.showStats);
+
+  if (rect.width <= 44 || rect.titleHeight <= 8) {
+    return;
+  }
+
+  const fontSize = compact
+    ? clamp(Math.floor(rect.titleHeight * 0.56), 9, 12)
+    : clamp(Math.floor(rect.titleHeight * 0.52), 10, 15);
+  const statsFontSize = compact
+    ? clamp(Math.floor(rect.titleHeight * 0.48), 8, 11)
+    : clamp(Math.floor(rect.titleHeight * 0.46), 9, 13);
+  const leftPad = compact ? 5 : 8;
+  const rightPad = showDrillHint ? 18 : compact ? 5 : 8;
+  const available = Math.max(0, rect.width - leftPad - rightPad);
+  const centerY = rect.y + rect.titleHeight / 2 + fontSize * (compact ? 0.06 : 0.08);
+  const clipX = rect.x + (compact ? 3 : 4);
+  const clipY = rect.y + (compact ? 1 : 2);
+  const clipWidth = Math.max(0, rect.width - (compact ? 6 : 8));
+  const clipHeight = Math.max(0, rect.titleHeight - (compact ? 2 : 4));
+  const trendText = formatBoardTrendCounts(messages, advanceCount, declineCount);
+  const changeText = compact && rect.width < 132 ? formatCompactChange(changePct) : formatChange(changePct);
+
+  context.textBaseline = "middle";
+  context.font = heatmapFont(650, statsFontSize);
+  const trendWidth = context.measureText(trendText).width;
+  const changeWidth = context.measureText(changeText).width;
+  const statsGap = compact ? 5 : 7;
+  const canShowTrend =
+    showStats && available > (compact ? 108 : 148) && trendWidth + changeWidth + statsGap < available * 0.64;
+  const canShowChange = showStats && available > (compact ? 72 : 96);
+  const statsWidth = canShowChange ? changeWidth + (canShowTrend ? trendWidth + statsGap : 0) : 0;
+  const nameMaxWidth = Math.max(0, available - (statsWidth > 0 ? statsWidth + (compact ? 6 : 8) : 0));
+
+  context.fillStyle = "rgba(247, 250, 252, 0.96)";
+  context.textAlign = "left";
+  context.font = heatmapFont(700, fontSize);
+  const fittedName = fitTextToWidth(context, name, nameMaxWidth);
+  if (fittedName) {
+    drawClippedText(context, fittedName, rect.x + leftPad, centerY, clipX, clipY, clipWidth, clipHeight);
+  }
+
+  if (!canShowChange) {
+    return;
+  }
+
+  context.font = heatmapFont(650, statsFontSize);
+  context.textAlign = "right";
+  const statsRight = rect.x + rect.width - rightPad;
+  drawClippedText(context, changeText, statsRight, centerY, clipX, clipY, clipWidth, clipHeight);
+
+  if (canShowTrend) {
+    context.fillStyle = "rgba(247, 250, 252, 0.86)";
+    drawClippedText(
+      context,
+      trendText,
+      statsRight - changeWidth - statsGap,
+      centerY,
+      clipX,
+      clipY,
+      clipWidth,
+      clipHeight
+    );
+  }
+}
+
+function drawSectorThumbnailLabel(
+  context: CanvasRenderingContext2D,
+  rect: SubBoardRect,
+  messages: HeatmapMessages,
+  zoomScale = 1
+) {
+  const displayWidth = rect.width * zoomScale;
+  const displayHeight = rect.height * zoomScale;
+  const screenUnit = 1 / zoomScale;
+  const clipPaddingPx = displayWidth > 110 ? 6 : displayWidth > 54 ? 4 : 3;
+  const textInsetXPx = displayWidth > 110 ? 8 : displayWidth > 54 ? 5 : 4;
+  const textInsetYPx = displayHeight > 64 ? 7 : displayHeight > 36 ? 5 : 3;
+  const clipPadding = clipPaddingPx * screenUnit;
+  const textInsetX = textInsetXPx * screenUnit;
+  const textInsetY = textInsetYPx * screenUnit;
+  const clipWidth = Math.max(0, rect.width - clipPadding * 2);
+  const clipHeight = Math.max(0, rect.height - clipPadding * 2);
+
+  if (displayWidth < 18 || displayHeight < 12 || clipWidth <= 2 || clipHeight <= 2) {
+    return;
+  }
+
+  const trendText = formatBoardTrendCounts(messages, rect.advanceCount, rect.declineCount);
+  const changeText = displayWidth >= 72 ? formatChange(rect.changePct) : formatCompactChange(rect.changePct);
+  const hasLargeLabel = displayWidth >= 96 && displayHeight >= 64;
+  const hasStackedLabel = displayWidth >= 44 && displayHeight >= 36;
+
+  context.save();
+  try {
+    context.fillStyle = "rgba(247, 250, 252, 0.96)";
+    context.shadowColor = "rgba(0, 0, 0, 0.42)";
+    context.shadowBlur = (displayHeight < 20 ? 0.5 : 1.3) * screenUnit;
+    context.shadowOffsetY = 0.6 * screenUnit;
+
+    if (hasLargeLabel) {
+      const preferredTitleSize =
+        clamp(Math.floor(Math.min(displayWidth, displayHeight) * 0.2), 13, 26) * screenUnit;
+      const titleSize = fitFontSizeToWidth(
+        context,
+        rect.name,
+        700,
+        preferredTitleSize,
+        Math.max(11 * screenUnit, preferredTitleSize * 0.66),
+        clipWidth
+      );
+      const detailSize = Math.min(
+        clamp(Math.floor(Math.min(displayWidth, displayHeight) * 0.16), 11, 22) * screenUnit,
+        titleSize * 1.05
+      );
+      const trendSize = Math.max(10 * screenUnit, detailSize * 0.78);
+      const centerX = rect.x + rect.width / 2;
+      const centerY = rect.y + rect.height / 2;
+
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.font = heatmapFont(700, titleSize);
+      drawClippedText(
+        context,
+        fitTextToWidth(context, rect.name, clipWidth),
+        centerX,
+        centerY - detailSize * 0.95,
+        rect.x + clipPadding,
+        rect.y + clipPadding,
+        clipWidth,
+        clipHeight
+      );
+
+      context.font = heatmapFont(700, detailSize);
+      drawClippedText(
+        context,
+        changeText,
+        centerX,
+        centerY + detailSize * 0.18,
+        rect.x + clipPadding,
+        rect.y + clipPadding,
+        clipWidth,
+        clipHeight
+      );
+
+      if (displayHeight >= 78) {
+        context.fillStyle = "rgba(247, 250, 252, 0.88)";
+        context.font = heatmapFont(600, trendSize);
+        drawClippedText(
+          context,
+          trendText,
+          centerX,
+          centerY + detailSize * 1.18,
+          rect.x + clipPadding,
+          rect.y + clipPadding,
+          clipWidth,
+          clipHeight
+        );
+      }
+      return;
+    }
+
+    if (hasStackedLabel) {
+      const preferredTitleSize =
+        clamp(Math.floor(Math.min(displayWidth * 0.2, displayHeight * 0.28)), 8, 16) * screenUnit;
+      const titleSize = fitFontSizeToWidth(
+        context,
+        rect.name,
+        700,
+        preferredTitleSize,
+        Math.max(7 * screenUnit, preferredTitleSize * 0.72),
+        clipWidth - (textInsetX - clipPadding)
+      );
+      const detailSize = Math.min(
+        clamp(Math.floor(displayHeight * 0.22), 8, 14) * screenUnit,
+        titleSize * 1.08
+      );
+      const trendSize = Math.max(7 * screenUnit, detailSize * 0.86);
+
+      context.textAlign = "left";
+      context.textBaseline = "alphabetic";
+      context.font = heatmapFont(700, titleSize);
+      drawClippedText(
+        context,
+        fitTextToWidth(context, rect.name, clipWidth - (textInsetX - clipPadding)),
+        rect.x + textInsetX,
+        rect.y + textInsetY + titleSize,
+        rect.x + clipPadding,
+        rect.y + clipPadding,
+        clipWidth,
+        clipHeight
+      );
+
+      context.font = heatmapFont(700, detailSize);
+      drawClippedText(
+        context,
+        changeText,
+        rect.x + textInsetX,
+        rect.y + textInsetY + titleSize + detailSize + 1.5 * screenUnit,
+        rect.x + clipPadding,
+        rect.y + clipPadding,
+        clipWidth,
+        clipHeight
+      );
+
+      if (displayHeight >= 52 && displayWidth >= 64) {
+        context.fillStyle = "rgba(247, 250, 252, 0.88)";
+        context.font = heatmapFont(600, trendSize);
+        drawClippedText(
+          context,
+          trendText,
+          rect.x + textInsetX,
+          rect.y + textInsetY + titleSize + detailSize + trendSize + 4.5 * screenUnit,
+          rect.x + clipPadding,
+          rect.y + clipPadding,
+          clipWidth,
+          clipHeight
+        );
+      }
+      return;
+    }
+
+    const fontSize = clamp(Math.floor(Math.min(displayWidth * 0.2, displayHeight * 0.58)), 7, 12) * screenUnit;
+    context.textAlign = "left";
+    context.textBaseline = "middle";
+    context.font = heatmapFont(700, fontSize);
+    const canShowChange = displayWidth >= 40 && displayHeight >= 16;
+    const fittedName = fitTextToWidth(
+      context,
+      canShowChange ? rect.name : changeText,
+      clipWidth - (textInsetX - clipPadding)
+    );
+    if (fittedName) {
+      drawClippedText(
+        context,
+        fittedName,
+        rect.x + textInsetX,
+        rect.y + rect.height / 2 + fontSize * 0.06,
+        rect.x + clipPadding,
+        rect.y + clipPadding,
+        clipWidth,
+        clipHeight
+      );
+    }
+  } finally {
+    context.restore();
+  }
+}
+
 function drawStockLabel(context: CanvasRenderingContext2D, stock: StockRect, zoomScale = 1) {
   const displayWidth = stock.width * zoomScale;
   const displayHeight = stock.height * zoomScale;
@@ -1647,6 +1944,7 @@ function MobileStockSheet({
   title,
   stock,
   stocks,
+  sectorStats,
   messages,
   priceColorMode,
   heatTheme,
@@ -1660,6 +1958,11 @@ function MobileStockSheet({
   title: string | null;
   stock: MobileStockSheetStock | null;
   stocks: MobileStockSheetStock[];
+  sectorStats: {
+    advanceCount: number;
+    declineCount: number;
+    changePct: number;
+  } | null;
   messages: HeatmapMessages;
   priceColorMode: PriceColorMode;
   heatTheme: HeatTheme;
@@ -1746,9 +2049,25 @@ function MobileStockSheet({
         {stocks.length > 0 && (
           <div className="flex min-h-0 flex-1 flex-col border-t border-slate-700/80 bg-[#0b0e13]">
             <div className="space-y-1 border-b border-slate-800/80 px-4 py-1.5">
-              <div className="flex items-center justify-between text-[11px] font-medium tracking-[0.08em] text-slate-400">
-                <span>{title ?? ""}</span>
-                <span className="tabular-nums">{stocks.length}</span>
+              <div className="flex items-center justify-between gap-2 text-[11px] font-medium tracking-[0.08em] text-slate-400">
+                <span className="min-w-0 truncate">{title ?? ""}</span>
+                {sectorStats ? (
+                  <div className="flex shrink-0 items-baseline gap-2 tabular-nums">
+                    <span className="font-semibold text-slate-300">
+                      {formatBoardTrendCounts(messages, sectorStats.advanceCount, sectorStats.declineCount)}
+                    </span>
+                    <span
+                      className="font-semibold"
+                      style={{
+                        color: getChangeTextColor(heatTheme, sectorStats.changePct, priceColorMode, displayMode),
+                      }}
+                    >
+                      {formatChange(sectorStats.changePct)}
+                    </span>
+                  </div>
+                ) : (
+                  <span className="tabular-nums">{stocks.length}</span>
+                )}
               </div>
               <InspectorSortControls
                 sortKey={sortKey}
@@ -2092,10 +2411,7 @@ function HeatThemeSettingsPanel({
 
   return (
     <section className="space-y-3">
-      <div>
-        <h3 className="text-sm font-semibold">{messages.heatThemeLabel}</h3>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{messages.heatThemeIntro}</p>
-      </div>
+      <h3 className="text-sm font-semibold">{messages.heatThemeLabel}</h3>
 
       <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
         {availableThemes.map((theme) => {
@@ -2582,6 +2898,7 @@ function FilterPanel({
   changeRangeMinInput,
   changeRangeMaxInput,
   sizeMode,
+  thumbnailMode,
   period,
   legendGradient,
   activeFilterCount,
@@ -2595,6 +2912,7 @@ function FilterPanel({
   onChangeRange,
   onClearChangeRange,
   onSizeModeChange,
+  onThumbnailModeChange,
   onPeriodChange,
   onResetFilters,
 }: {
@@ -2608,6 +2926,7 @@ function FilterPanel({
   changeRangeMinInput: string;
   changeRangeMaxInput: string;
   sizeMode: HeatmapSizeMode;
+  thumbnailMode: boolean;
   period: HeatmapPeriodKey;
   legendGradient: string;
   activeFilterCount: number;
@@ -2621,6 +2940,7 @@ function FilterPanel({
   onChangeRange: (range: ChangeRangeFilter) => void;
   onClearChangeRange: () => void;
   onSizeModeChange: (mode: HeatmapSizeMode) => void;
+  onThumbnailModeChange: (enabled: boolean) => void;
   onPeriodChange: (next: HeatmapPeriodKey) => void;
   onResetFilters: () => void;
 }) {
@@ -2917,6 +3237,28 @@ function FilterPanel({
             </button>
           </div>
         </section>
+
+        <section>
+          <h3 className="mb-1.5 text-[11px] font-semibold text-muted-foreground">{messages.thumbnailModeLabel}</h3>
+          <div className="grid grid-cols-2 gap-1">
+            <button
+              type="button"
+              onClick={() => onThumbnailModeChange(false)}
+              aria-pressed={!thumbnailMode}
+              className={filterChipClass(!thumbnailMode)}
+            >
+              {messages.thumbnailModeOff}
+            </button>
+            <button
+              type="button"
+              onClick={() => onThumbnailModeChange(true)}
+              aria-pressed={thumbnailMode}
+              className={filterChipClass(thumbnailMode)}
+            >
+              {messages.thumbnailModeOn}
+            </button>
+          </div>
+        </section>
       </div>
     </section>
   );
@@ -2929,6 +3271,7 @@ function SettingsDrawer({
   locale,
   displayMode,
   filterOpenMode,
+  headerTrendStats,
   themeColor,
   priceColorMode,
   heatThemeId,
@@ -2941,6 +3284,7 @@ function SettingsDrawer({
   onLocaleChange,
   onDisplayModeChange,
   onFilterOpenModeChange,
+  onHeaderTrendStatsChange,
   onThemeColorChange,
   onPriceColorModeChange,
   onHeatThemeIdChange,
@@ -2958,6 +3302,7 @@ function SettingsDrawer({
   locale: Locale;
   displayMode: DisplayMode;
   filterOpenMode: FilterOpenMode;
+  headerTrendStats: boolean;
   themeColor: ThemeColorKey;
   priceColorMode: PriceColorMode;
   heatThemeId: string;
@@ -2971,6 +3316,7 @@ function SettingsDrawer({
   onLocaleChange: (locale: Locale) => void;
   onDisplayModeChange: (mode: DisplayMode) => void;
   onFilterOpenModeChange: (mode: FilterOpenMode) => void;
+  onHeaderTrendStatsChange: (enabled: boolean) => void;
   onThemeColorChange: (theme: ThemeColorKey) => void;
   onPriceColorModeChange: (mode: PriceColorMode) => void;
   onHeatThemeIdChange: (id: string) => void;
@@ -3060,6 +3406,7 @@ function SettingsDrawer({
   const helpItems = [
     areaTipMessage,
     messages.tipColor,
+    messages.tipThumbnail,
     messages.tipDoubleClick,
     messages.tipZoom,
     messages.tipDrag,
@@ -3197,12 +3544,41 @@ function SettingsDrawer({
                   </div>
                 </section>
 
+                <section>
+                  <h3 className="text-sm font-semibold">{messages.headerTrendStatsLabel}</h3>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onHeaderTrendStatsChange(false)}
+                      aria-pressed={!headerTrendStats}
+                      className={cn(
+                        "border px-3 py-2 text-left text-sm font-semibold transition-colors md:py-3",
+                        !headerTrendStats
+                          ? "border-brand/70 bg-brand/15 text-foreground"
+                          : "border-border bg-background/70 text-muted-foreground hover:bg-muted hover:text-foreground"
+                      )}
+                    >
+                      {messages.headerTrendStatsOff}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onHeaderTrendStatsChange(true)}
+                      aria-pressed={headerTrendStats}
+                      className={cn(
+                        "border px-3 py-2 text-left text-sm font-semibold transition-colors md:py-3",
+                        headerTrendStats
+                          ? "border-brand/70 bg-brand/15 text-foreground"
+                          : "border-border bg-background/70 text-muted-foreground hover:bg-muted hover:text-foreground"
+                      )}
+                    >
+                      {messages.headerTrendStatsOn}
+                    </button>
+                  </div>
+                </section>
+
                 {!isMobile && (
                   <section>
                     <h3 className="text-sm font-semibold">{messages.filterOpenModeLabel}</h3>
-                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                      {messages.filterOpenModeDescription}
-                    </p>
                     <div className="mt-2 grid grid-cols-2 gap-2">
                       <button
                         type="button"
@@ -3544,6 +3920,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   const [changeRangeMinInput, setChangeRangeMinInput] = useState("");
   const [changeRangeMaxInput, setChangeRangeMaxInput] = useState("");
   const [sizeMode, setSizeMode] = useState<HeatmapSizeMode>("marketCap");
+  const [thumbnailMode, setThumbnailMode] = useState(false);
+  const [headerTrendStats, setHeaderTrendStats] = useState(true);
   const [marketSummaries, setMarketSummaries] = useState<Partial<Record<MarketKey, MarketSummary>>>({});
   const [treemapData, setTreemapData] = useState<TreemapResponse | null>(null);
   const [quotes, setQuotes] = useState<QuoteMap>({});
@@ -3670,6 +4048,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       const storedPriceColor = window.localStorage.getItem("heatmap-price-color");
       const storedFilterOpenMode = window.localStorage.getItem(filterOpenModeStorageKey);
       const storedSizeMode = window.localStorage.getItem("heatmap-size-mode");
+      const storedThumbnailMode = window.localStorage.getItem(thumbnailModeStorageKey);
+      const storedHeaderTrendStats = window.localStorage.getItem(headerTrendStatsStorageKey);
       const storedMarket = window.sessionStorage.getItem(marketStorageKey);
       const storedPeriod = window.sessionStorage.getItem(periodStorageKey);
       const storedBoardFilter = window.sessionStorage.getItem(boardFilterStorageKey);
@@ -3697,6 +4077,12 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       }
       if (storedSizeMode === "marketCap" || storedSizeMode === "turnover") {
         setSizeMode(storedSizeMode);
+      }
+      if (storedThumbnailMode === "on" || storedThumbnailMode === "off") {
+        setThumbnailMode(storedThumbnailMode === "on");
+      }
+      if (storedHeaderTrendStats === "on" || storedHeaderTrendStats === "off") {
+        setHeaderTrendStats(storedHeaderTrendStats === "on");
       }
       const storedWatchlist = window.localStorage.getItem(watchlistStorageKey);
       setWatchlist(parseStoredWatchlist(storedWatchlist));
@@ -3815,6 +4201,28 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       /* Preferences are optional. */
     }
   }, [preferencesReady, sizeMode]);
+
+  useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(thumbnailModeStorageKey, thumbnailMode ? "on" : "off");
+    } catch {
+      /* Preferences are optional. */
+    }
+  }, [preferencesReady, thumbnailMode]);
+
+  useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(headerTrendStatsStorageKey, headerTrendStats ? "on" : "off");
+    } catch {
+      /* Preferences are optional. */
+    }
+  }, [headerTrendStats, preferencesReady]);
 
   useEffect(() => {
     if (!preferencesReady) {
@@ -4207,7 +4615,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
 
   useEffect(() => {
     setView({ scale: 1, x: 0, y: 0 });
-  }, [sizeMode]);
+  }, [sizeMode, thumbnailMode]);
 
   const applyChangeRange = useCallback((next: ChangeRangeFilter) => {
     const normalized = normalizeChangeRangeFilter(next);
@@ -4516,10 +4924,11 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
 
     for (const boardBox of boardBoxes) {
       const boardChangePct = weightedAverageChange(boardBox.item.children, quotes);
+      const boardTrends = countStockTrends(boardBox.item.children, quotes);
       const titleHeight =
         boardBox.width < 84 || boardBox.height < 54
           ? 0
-          : clamp(Math.round(Math.min(Math.max(boardBox.height * 0.09, 14), 24)), 12, 24);
+          : clamp(Math.round(Math.min(Math.max(boardBox.height * 0.1, 16), 26)), 14, 26);
       const contentPadding = boardBox.width > 110 && boardBox.height > 90 ? 3 : 2;
       const contentX = boardBox.x + contentPadding;
       const contentY = boardBox.y + titleHeight + contentPadding;
@@ -4535,6 +4944,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         stockCount: boardBox.item.stockCount,
         titleHeight,
         changePct: boardChangePct,
+        ...boardTrends,
       });
 
       if (contentWidth <= 2 || contentHeight <= 2) {
@@ -4542,9 +4952,25 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       }
 
       const subBoards = groupStocksBySubBoard(boardBox.item.children, quotes);
-      const shouldNestSubBoards = market !== "zza50" && subBoards.length > 1;
+      const shouldNestSubBoards = market !== "zza50" && (thumbnailMode || subBoards.length > 1);
 
       if (!shouldNestSubBoards) {
+        if (thumbnailMode) {
+          subBoardRects.push({
+            name: boardBox.item.name,
+            boardName: boardBox.item.name,
+            x: contentX,
+            y: contentY,
+            width: contentWidth,
+            height: contentHeight,
+            stockCount: boardBox.item.stockCount,
+            titleHeight: 0,
+            changePct: boardChangePct,
+            ...boardTrends,
+          });
+          continue;
+        }
+
         const stockBoxes = binaryTreemap(
           boardBox.item.children.map((stock) => ({ item: stock, value: stock.value })),
           contentX,
@@ -4581,15 +5007,21 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         contentY,
         contentWidth,
         contentHeight,
-        boardBox.width > 96 && boardBox.height > 72 ? 2 : 1
+        boardBox.width > 96 && boardBox.height > 72 ? (thumbnailMode ? 3 : 2) : thumbnailMode ? 2 : 1
       );
 
       for (const subBoardBox of subBoardBoxes) {
-        const subTitleHeight =
-          subBoardBox.width < 52 || subBoardBox.height < 34
+        const subTrends = countStockTrends(subBoardBox.item.children, quotes);
+        const subTitleHeight = thumbnailMode
+          ? 0
+          : subBoardBox.width < 52 || subBoardBox.height < 40
             ? 0
-            : clamp(Math.round(Math.min(Math.max(subBoardBox.height * 0.11, 10), 18)), 9, 18);
-        const subPadding = subBoardBox.width > 82 && subBoardBox.height > 56 ? 2 : 1;
+            : clamp(Math.round(Math.min(Math.max(subBoardBox.height * 0.14, 14), 22)), 12, 22);
+        const subPadding = thumbnailMode
+          ? 0
+          : subBoardBox.width > 82 && subBoardBox.height > 56
+            ? 2
+            : 1;
         const subContentX = subBoardBox.x + subPadding;
         const subContentY = subBoardBox.y + subTitleHeight + subPadding;
         const subContentWidth = Math.max(0, subBoardBox.width - subPadding * 2);
@@ -4605,9 +5037,10 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
           stockCount: subBoardBox.item.stockCount,
           titleHeight: subTitleHeight,
           changePct: subBoardBox.item.changePct,
+          ...subTrends,
         });
 
-        if (subContentWidth <= 2 || subContentHeight <= 2) {
+        if (thumbnailMode || subContentWidth <= 2 || subContentHeight <= 2) {
           continue;
         }
 
@@ -4641,7 +5074,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     }
 
     return { stockRects, boardRects, subBoardRects };
-  }, [canvasSize.height, canvasSize.width, market, quotes, sizedTreemapData]);
+  }, [canvasSize.height, canvasSize.width, market, quotes, sizedTreemapData, thumbnailMode]);
 
   useEffect(() => {
     lastStockRectsRef.current = layout.stockRects;
@@ -4699,7 +5132,13 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       return [];
     }
 
-    return board.children
+    const scopedChildren =
+      thumbnailMode && activeSubBoardName
+        ? board.children.filter((stock) => (stock.subBoardName || stock.boardName) === activeSubBoardName)
+        : board.children;
+    const children = scopedChildren.length > 0 ? scopedChildren : board.children;
+
+    return children
       .map((stock) => {
         const quote = quotes[stock.code];
         return {
@@ -4713,7 +5152,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         };
       })
       .sort((left, right) => compareInspectorStocks(left, right, inspectorSortKey));
-  }, [activeBoardName, inspectorSortKey, quotes, visibleTreemapData]);
+  }, [activeBoardName, activeSubBoardName, inspectorSortKey, quotes, thumbnailMode, visibleTreemapData]);
 
   const inspectorStocks = useMemo(() => {
     if (activeBoardStocks.length === 0) {
@@ -4762,6 +5201,30 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
 
     return activeBoardName;
   }, [activeBoardName, highlightedStock, activeSubBoardName]);
+
+  const inspectorSectorStats = useMemo(() => {
+    if (!activeBoardName || !visibleTreemapData) {
+      return null;
+    }
+
+    const board = visibleTreemapData.nodes.find((node) => node.name === activeBoardName);
+    if (!board) {
+      return null;
+    }
+
+    const subBoardName = highlightedStock?.subBoardName || activeSubBoardName;
+    const scoped =
+      subBoardName && subBoardName !== activeBoardName
+        ? board.children.filter((stock) => (stock.subBoardName || stock.boardName) === subBoardName)
+        : board.children;
+    const stocks = scoped.length > 0 ? scoped : board.children;
+    const trends = countStockTrends(stocks, quotes);
+
+    return {
+      ...trends,
+      changePct: weightedAverageChange(stocks, quotes),
+    };
+  }, [activeBoardName, activeSubBoardName, highlightedStock, quotes, visibleTreemapData]);
 
   const inspectorStyle = useMemo(() => {
     if (isMobile) {
@@ -4967,21 +5430,25 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     }
 
     for (const subBoard of layout.subBoardRects) {
-      context.fillStyle = heatmapCanvasTheme.subBoardFill;
+      context.fillStyle = thumbnailMode
+        ? getHeatColor(activeHeatTheme, subBoard.changePct, priceColorMode, displayMode)
+        : heatmapCanvasTheme.subBoardFill;
       context.fillRect(subBoard.x, subBoard.y, subBoard.width, subBoard.height);
     }
 
-    for (const stock of layout.stockRects) {
-      context.fillStyle = getHeatColor(activeHeatTheme, stock.changePct, priceColorMode, displayMode);
-      context.fillRect(stock.x, stock.y, stock.width, stock.height);
-      drawStockLabel(context, stock, view.scale);
+    if (!thumbnailMode) {
+      for (const stock of layout.stockRects) {
+        context.fillStyle = getHeatColor(activeHeatTheme, stock.changePct, priceColorMode, displayMode);
+        context.fillRect(stock.x, stock.y, stock.width, stock.height);
+        drawStockLabel(context, stock, view.scale);
+      }
     }
 
     for (const subBoard of layout.subBoardRects) {
       const isActiveSubBoard =
         activeSubBoardName === subBoard.name && activeBoardName === subBoard.boardName;
 
-      if (subBoard.titleHeight > 0) {
+      if (!thumbnailMode && subBoard.titleHeight > 0) {
         context.fillStyle = getBoardHeaderColor(
           activeHeatTheme,
           subBoard.changePct,
@@ -4994,7 +5461,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       context.strokeStyle = isActiveSubBoard
         ? heatmapCanvasTheme.activeSubBoardStroke
         : heatmapCanvasTheme.subBoardBorder;
-      context.lineWidth = isActiveSubBoard ? 2 : 0.9;
+      context.lineWidth = isActiveSubBoard ? 2 : thumbnailMode ? 1.1 : 0.9;
       context.strokeRect(
         subBoard.x + 0.5,
         subBoard.y + 0.5,
@@ -5013,22 +5480,18 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         );
       }
 
-      if (subBoard.width > 44 && subBoard.titleHeight > 8) {
-        const fontSize = clamp(Math.floor(subBoard.titleHeight * 0.56), 9, 12);
-        context.fillStyle = "rgba(247, 250, 252, 0.92)";
-        context.textAlign = "left";
-        context.textBaseline = "middle";
-        context.font = `700 ${fontSize}px Arial, sans-serif`;
-        drawClippedText(
-          context,
-          shortenText(subBoard.name, subBoard.width > 108 ? 8 : 5),
-          subBoard.x + 5,
-          subBoard.y + subBoard.titleHeight / 2 + fontSize * 0.06,
-          subBoard.x + 3,
-          subBoard.y + 1,
-          Math.max(0, subBoard.width - 6),
-          Math.max(0, subBoard.titleHeight - 2)
-        );
+      if (thumbnailMode) {
+        drawSectorThumbnailLabel(context, subBoard, messages, view.scale);
+      } else if (subBoard.width > 44 && subBoard.titleHeight > 8) {
+        drawSectorHeaderLabel(context, subBoard, {
+          name: subBoard.name,
+          changePct: subBoard.changePct,
+          advanceCount: subBoard.advanceCount,
+          declineCount: subBoard.declineCount,
+          messages,
+          compact: true,
+          showStats: headerTrendStats,
+        });
       }
     }
 
@@ -5056,30 +5519,24 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
 
       if (board.width > 56 && board.titleHeight > 10) {
         const isBreadcrumb = boardFilter.includes(board.name);
-        const fontSize = clamp(Math.floor(board.titleHeight * 0.52), 10, 15);
         const titleText = isBreadcrumb
           ? boardFilter.length === 1
             ? `‹ ${messages.boardBreadcrumbAll} - ${board.name}`
             : `‹ ${board.name}`
-          : shortenText(board.name, board.width > 180 ? 12 : 8);
-        context.fillStyle = "rgba(247, 250, 252, 0.96)";
-        context.textAlign = "left";
-        context.textBaseline = "middle";
-        context.font = `700 ${fontSize}px Arial, sans-serif`;
-        drawClippedText(
-          context,
-          titleText,
-          board.x + 8,
-          board.y + board.titleHeight / 2 + fontSize * 0.08,
-          board.x + 4,
-          board.y + 2,
-          Math.max(0, board.width - (showDrillHint ? 22 : 8)),
-          Math.max(0, board.titleHeight - 4)
-        );
+          : board.name;
+        drawSectorHeaderLabel(context, board, {
+          name: titleText,
+          changePct: board.changePct,
+          advanceCount: board.advanceCount,
+          declineCount: board.declineCount,
+          messages,
+          showDrillHint,
+          showStats: thumbnailMode || headerTrendStats,
+        });
 
         if (showDrillHint) {
           context.fillStyle = isTitleHovered || isActiveBoard ? "rgba(255, 255, 255, 0.95)" : "rgba(247, 250, 252, 0.72)";
-          context.font = `700 ${Math.max(10, fontSize)}px Arial, sans-serif`;
+          context.font = heatmapFont(700, Math.max(10, clamp(Math.floor(board.titleHeight * 0.52), 10, 15)));
           context.textAlign = "right";
           context.textBaseline = "middle";
           context.fillText("›", board.x + board.width - 8, board.y + board.titleHeight / 2 + 0.5);
@@ -5121,7 +5578,9 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     layout.boardRects,
     layout.subBoardRects,
     layout.stockRects,
-    messages.boardBreadcrumbAll,
+    messages,
+    thumbnailMode,
+    headerTrendStats,
     activeHeatTheme,
     displayMode,
     priceColorMode,
@@ -6627,7 +7086,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                   ? "grabbing"
                   : view.scale > 1
                     ? "grab"
-                    : (activeStock || hoveredBoardTitleName) && !isMobile
+                    : (activeStock || hoveredBoardTitleName || (thumbnailMode && hoveredSubBoardName)) && !isMobile
                       ? "pointer"
                       : "default",
               }}
@@ -6713,12 +7172,38 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                       <div className="space-y-1 border-b border-slate-300/70 px-3 py-1.5">
                         <div className="flex items-center justify-between gap-2 text-[11px] font-medium tracking-[0.08em] text-slate-500">
                           <span className="min-w-0 truncate">{activeInspectorTitle ?? activeBoardName}</span>
-                          <div className="flex shrink-0 items-center gap-2 text-right">
-                            <span className="text-[10px] font-medium tracking-[0.03em] text-slate-400">
-                              {messages.inspectorScrollHint}
-                            </span>
-                            <span>{inspectorStocks.length}</span>
-                          </div>
+                          {inspectorSectorStats ? (
+                            <div className="flex shrink-0 items-baseline gap-2 tabular-nums">
+                              <span className="text-[11px] font-semibold text-slate-600">
+                                {formatBoardTrendCounts(
+                                  messages,
+                                  inspectorSectorStats.advanceCount,
+                                  inspectorSectorStats.declineCount
+                                )}
+                              </span>
+                              <span
+                                className="text-[12px] font-semibold"
+                                style={{
+                                  color: getChangeTextColor(
+                                    activeHeatTheme,
+                                    inspectorSectorStats.changePct,
+                                    priceColorMode,
+                                    displayMode,
+                                    "strong"
+                                  ),
+                                }}
+                              >
+                                {formatChange(inspectorSectorStats.changePct)}
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="flex shrink-0 items-center gap-2 text-right">
+                              <span className="text-[10px] font-medium tracking-[0.03em] text-slate-400">
+                                {messages.inspectorScrollHint}
+                              </span>
+                              <span>{inspectorStocks.length}</span>
+                            </div>
+                          )}
                         </div>
                         <InspectorSortControls
                           sortKey={inspectorSortKey}
@@ -6962,6 +7447,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                   >
                     <p>{areaTipMessage.replace(/^·\s*/, "")}</p>
                     <p>{messages.tipColor.replace(/^·\s*/, "")}</p>
+                    <p>{messages.tipThumbnail.replace(/^·\s*/, "")}</p>
                     <p>{(isMobile ? messages.tipTap : messages.tipDoubleClick).replace(/^·\s*/, "")}</p>
                     <p>{(isMobile ? messages.tipPinch : messages.tipZoom).replace(/^·\s*/, "")}</p>
                     <p>{messages.tipDrag.replace(/^·\s*/, "")}</p>
@@ -6994,6 +7480,24 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
 
                 <button
                   type="button"
+                  onClick={() => setThumbnailMode((current) => !current)}
+                  aria-label={messages.thumbnailModeLabel}
+                  aria-pressed={thumbnailMode}
+                  title={messages.thumbnailModeLabel}
+                  className={cn(
+                    "hidden size-7 shrink-0 items-center justify-center bg-transparent transition-colors hover:text-brand focus-visible:text-brand md:inline-flex",
+                    thumbnailMode
+                      ? "text-brand hover:bg-brand/12 focus-visible:bg-brand/12"
+                      : isLightMode
+                        ? "text-muted-foreground hover:bg-muted focus-visible:bg-muted"
+                        : "text-slate-400 hover:bg-white/5 focus-visible:bg-white/5"
+                  )}
+                >
+                  <LayoutGrid className="size-3.5" />
+                </button>
+
+                <button
+                  type="button"
                   onClick={createSharePreview}
                   disabled={sharePending}
                   aria-label={sharePending ? messages.generatingShareImage : messages.shareToApps}
@@ -7016,6 +7520,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
           title={activeInspectorTitle ?? selectedBoardName}
           stock={activeInspectorStock}
           stocks={inspectorStocks}
+          sectorStats={inspectorSectorStats}
           messages={messages}
           priceColorMode={priceColorMode}
           heatTheme={activeHeatTheme}
@@ -7046,6 +7551,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
           changeRangeMinInput={changeRangeMinInput}
           changeRangeMaxInput={changeRangeMaxInput}
           sizeMode={sizeMode}
+          thumbnailMode={thumbnailMode}
           period={period}
           legendGradient={changeRangeSliderGradient}
           activeFilterCount={activeFilterCount}
@@ -7059,6 +7565,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
           onChangeRange={applyChangeRange}
           onClearChangeRange={() => applyChangeRange(emptyChangeRangeFilter)}
           onSizeModeChange={setSizeMode}
+          onThumbnailModeChange={setThumbnailMode}
           onPeriodChange={setPeriod}
           onResetFilters={resetViewFilters}
         />
@@ -7071,6 +7578,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         locale={locale}
         displayMode={displayMode}
         filterOpenMode={filterOpenMode}
+        headerTrendStats={headerTrendStats}
         themeColor={themeColor}
         priceColorMode={priceColorMode}
         heatThemeId={heatThemeId}
@@ -7084,6 +7592,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         onLocaleChange={setLocale}
         onDisplayModeChange={setDisplayMode}
         onFilterOpenModeChange={setFilterOpenMode}
+        onHeaderTrendStatsChange={setHeaderTrendStats}
         onThemeColorChange={setThemeColor}
         onPriceColorModeChange={setPriceColorMode}
         onHeatThemeIdChange={setHeatThemeId}
