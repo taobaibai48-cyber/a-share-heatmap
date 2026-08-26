@@ -48,6 +48,27 @@ function fetchEastmoney() {
   return all;
 }
 
+function fetchTurnoverSummary() {
+  const url =
+    "https://dq.10jqka.com.cn/fuyao/market_analysis_api/chart/v1/get_chart_data?chart_key=turnover_minute";
+  const raw = execSync(
+    `curl -s --proxy "${PROXY}" --connect-timeout 15 --max-time 20 -H "Referer: https://dq.10jqka.com.cn/" "${url}"`,
+    { encoding: "utf8" }
+  );
+  const json = JSON.parse(raw);
+  const header = json.data?.charts?.header || [];
+  const get = (key) => {
+    const item = header.find((h) => h.key === key);
+    return item ? Number(item.val) : 0;
+  };
+  return {
+    turnoverAmount: get("turnover"),
+    turnoverPreviousAmount: get("turnover_pre"),
+    turnoverDelta: get("turnover_change"),
+  };
+}
+
+// 1. Fetch individual stock quotes from eastmoney
 const diff = fetchEastmoney();
 const map = new Map();
 for (const it of diff) {
@@ -59,6 +80,20 @@ for (const it of diff) {
 }
 console.log(`\n[refresh] fetched ${diff.length} quotes, ${map.size} valid from eastmoney`);
 
+// 2. Fetch market turnover summary from 10jqka (同花顺)
+let turnover = {};
+try {
+  turnover = fetchTurnoverSummary();
+  console.log(
+    `[refresh] turnover: today=${(turnover.turnoverAmount / 1e8).toFixed(0)}亿 ` +
+    `yesterday=${(turnover.turnoverPreviousAmount / 1e8).toFixed(0)}亿 ` +
+    `delta=${(turnover.turnoverDelta / 1e8).toFixed(0)}亿`
+  );
+} catch (e) {
+  console.warn("[refresh] turnover summary fetch failed:", e.message);
+}
+
+// 3. Write updated fallback snapshot
 const fb = JSON.parse(readFileSync(FB_PATH, "utf8"));
 let updated = 0;
 let skipped = 0;
@@ -74,6 +109,10 @@ for (const s of fb.stocks) {
   }
 }
 fb.updatedAt = new Date().toISOString();
+
+// Embed turnover summary into fallback JSON so backend can use it even when remote is unreachable
+fb.turnoverSummary = turnover;
+
 writeFileSync(FB_PATH, JSON.stringify(fb));
 console.log(
   `[refresh] updated ${updated} stocks, skipped ${skipped}; new updatedAt=${fb.updatedAt}`

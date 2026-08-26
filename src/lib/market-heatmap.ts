@@ -255,6 +255,11 @@ const fallbackSnapshotSeed = fallbackMarketSnapshot as {
   stockCount: number;
   boardCount: number;
   stocks: Array<Omit<StockSnapshot, "subBoardName">>;
+  turnoverSummary?: {
+    turnoverAmount: number;
+    turnoverPreviousAmount: number;
+    turnoverDelta: number;
+  };
 };
 
 const subboardSeed = subboardSnapshot as {
@@ -1494,7 +1499,14 @@ async function getFallbackTreemapDataFromStocks(
       turnoverDelta: remoteSummary.turnoverDelta,
     };
   } catch {
-    // Remote unavailable — will use 0 defaults
+    // Remote unavailable — try embedded summary from refresh script
+    const embedded = fallbackSnapshotSeed.turnoverSummary;
+    if (embedded) {
+      remoteTurnover = {
+        turnoverPreviousAmount: embedded.turnoverPreviousAmount,
+        turnoverDelta: embedded.turnoverDelta,
+      };
+    }
   }
 
   return {
@@ -1704,7 +1716,14 @@ async function getFallbackTreemapData(
       turnoverDelta: remoteSummary.turnoverDelta,
     };
   } catch {
-    // Remote unavailable — will use 0 defaults
+    // Remote unavailable — try embedded summary from refresh script
+    const embedded = fallbackSnapshotSeed.turnoverSummary;
+    if (embedded) {
+      remoteTurnover = {
+        turnoverPreviousAmount: embedded.turnoverPreviousAmount,
+        turnoverDelta: embedded.turnoverDelta,
+      };
+    }
   }
 
   return {
