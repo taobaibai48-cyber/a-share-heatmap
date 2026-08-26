@@ -1461,7 +1461,7 @@ function getFallbackQuoteDataFromStocks(
     market: "all",
     period,
     metric,
-    updatedAt: fallbackSnapshotSeed.updatedAt,
+    updatedAt: new Date().toISOString(),
     quotes,
     source: "fallback",
   };
@@ -1480,7 +1480,7 @@ function getFallbackTreemapDataFromStocks(
   return {
     market: "all",
     period,
-    updatedAt: fallbackSnapshotSeed.updatedAt,
+    updatedAt: new Date().toISOString(),
     stockCount: snapshot.length,
     boardCount: nodes.length,
     summary: {
@@ -1676,7 +1676,7 @@ async function getFallbackTreemapData(
   return {
     market,
     period,
-    updatedAt: fallbackSnapshotSeed.updatedAt,
+    updatedAt: new Date().toISOString(),
     stockCount: marketStocks.length,
     boardCount: nodes.length,
     summary: {
@@ -1909,14 +1909,14 @@ export async function getOverviewData(
           market,
           changePct: Number.isFinite(changePct) ? changePct : 0,
           stockCount: stocks.length,
-          updatedAt: fallbackSnapshotSeed.updatedAt,
+          updatedAt: new Date().toISOString(),
         };
       })
     );
 
     return {
       period,
-      updatedAt: fallbackSnapshotSeed.updatedAt,
+      updatedAt: new Date().toISOString(),
       markets: fallbackMarkets,
       source: "fallback",
     };
