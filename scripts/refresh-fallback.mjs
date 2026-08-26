@@ -22,7 +22,7 @@ function toSecid(code) {
 function fetchEastmoneyPage(secids) {
   const url =
     `https://push2delay.eastmoney.com/api/qt/ulist.np/get?ut=${UT}` +
-    `&fltt=2&invt=2&fields=f12,f14,f2,f3&secids=${secids.join(",")}`;
+    `&fltt=2&invt=2&fields=f12,f14,f2,f3,f6&secids=${secids.join(",")}`;
   const raw = execSync(
     `curl -s --proxy "${PROXY}" --connect-timeout 15 --max-time 45 "${url}"`,
     { encoding: "utf8" }
@@ -75,8 +75,9 @@ for (const it of diff) {
   const code = String(it.f12);
   const price = Number(it.f2);
   const changePct = Number(it.f3);
+  const turnoverAmount = Number(it.f6) || 0;
   if (!code || !Number.isFinite(price) || !Number.isFinite(changePct)) continue;
-  map.set(code, { price, changePct });
+  map.set(code, { price, changePct, turnoverAmount });
 }
 console.log(`\n[refresh] fetched ${diff.length} quotes, ${map.size} valid from eastmoney`);
 
@@ -103,6 +104,7 @@ for (const s of fb.stocks) {
   if (q) {
     s.price = q.price;
     s.changePct = q.changePct;
+    if (q.turnoverAmount > 0) s.turnoverAmount = q.turnoverAmount;
     updated++;
   } else {
     skipped++;

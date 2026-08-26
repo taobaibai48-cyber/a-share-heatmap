@@ -1491,10 +1491,11 @@ async function getFallbackTreemapDataFromStocks(
   const nodes = buildNodesFromStocks(snapshot, {}, period);
 
   // Try to fetch real turnover summary from remote (lightweight, one-call)
-  let remoteTurnover: { turnoverPreviousAmount: number; turnoverDelta: number } | undefined;
+  let remoteTurnover: { turnoverAmount?: number; turnoverPreviousAmount: number; turnoverDelta: number } | undefined;
   try {
     const remoteSummary = await fetchMarketSummaryFromRemote();
     remoteTurnover = {
+      turnoverAmount: remoteSummary.turnoverAmount,
       turnoverPreviousAmount: remoteSummary.turnoverPreviousAmount,
       turnoverDelta: remoteSummary.turnoverDelta,
     };
@@ -1503,11 +1504,14 @@ async function getFallbackTreemapDataFromStocks(
     const embedded = fallbackSnapshotSeed.turnoverSummary;
     if (embedded) {
       remoteTurnover = {
+        turnoverAmount: embedded.turnoverAmount,
         turnoverPreviousAmount: embedded.turnoverPreviousAmount,
         turnoverDelta: embedded.turnoverDelta,
       };
     }
   }
+
+  const baseSummary = summarizeStocks(snapshot, {}, period);
 
   return {
     market: "all",
@@ -1516,8 +1520,10 @@ async function getFallbackTreemapDataFromStocks(
     stockCount: snapshot.length,
     boardCount: nodes.length,
     summary: {
-      ...summarizeStocks(snapshot, {}, period),
+      ...baseSummary,
       indexChangePct: weightedChangePct(snapshot, {}, period),
+      // Prefer 同花顺 summary total over per-stock sum (more accurate)
+      turnoverAmount: remoteTurnover?.turnoverAmount ?? baseSummary.turnoverAmount,
       turnoverPreviousAmount: remoteTurnover?.turnoverPreviousAmount ?? 0,
       turnoverDelta: remoteTurnover?.turnoverDelta ?? 0,
     },
@@ -1708,10 +1714,11 @@ async function getFallbackTreemapData(
   const fallbackIndexChangePct = weightedChangePct(marketStocks, {}, period);
 
   // Try to fetch real turnover summary from remote (lightweight, one-call)
-  let remoteTurnover: { turnoverPreviousAmount: number; turnoverDelta: number } | undefined;
+  let remoteTurnover: { turnoverAmount?: number; turnoverPreviousAmount: number; turnoverDelta: number } | undefined;
   try {
     const remoteSummary = await fetchMarketSummaryFromRemote();
     remoteTurnover = {
+      turnoverAmount: remoteSummary.turnoverAmount,
       turnoverPreviousAmount: remoteSummary.turnoverPreviousAmount,
       turnoverDelta: remoteSummary.turnoverDelta,
     };
@@ -1720,11 +1727,14 @@ async function getFallbackTreemapData(
     const embedded = fallbackSnapshotSeed.turnoverSummary;
     if (embedded) {
       remoteTurnover = {
+        turnoverAmount: embedded.turnoverAmount,
         turnoverPreviousAmount: embedded.turnoverPreviousAmount,
         turnoverDelta: embedded.turnoverDelta,
       };
     }
   }
+
+  const baseSummary = summarizeStocks(marketStocks, {}, period);
 
   return {
     market,
@@ -1733,8 +1743,10 @@ async function getFallbackTreemapData(
     stockCount: marketStocks.length,
     boardCount: nodes.length,
     summary: {
-      ...summarizeStocks(marketStocks, {}, period),
+      ...baseSummary,
       indexChangePct: Number.isFinite(indexChangePct) ? indexChangePct : fallbackIndexChangePct,
+      // Prefer 同花顺 summary total over per-stock sum (more accurate)
+      turnoverAmount: remoteTurnover?.turnoverAmount ?? baseSummary.turnoverAmount,
       turnoverPreviousAmount: remoteTurnover?.turnoverPreviousAmount ?? 0,
       turnoverDelta: remoteTurnover?.turnoverDelta ?? 0,
     },
