@@ -9,6 +9,7 @@ import {
 } from "@/lib/market-heatmap";
 
 export const maxDuration = 60;
+export const regions = ["hkg1"];
 
 export async function GET(request: NextRequest) {
   const marketParam = request.nextUrl.searchParams.get("market") ?? "all";

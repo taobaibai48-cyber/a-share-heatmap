@@ -1212,7 +1212,10 @@ async function getMarketIndexSnapshot() {
     return indexPromise;
   }
 
-  indexPromise = fetchMarketIndexSnapshotFromRemote()
+  const indexSnapshotTimeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("index snapshot timed out after 15s")), 15_000)
+  );
+  indexPromise = Promise.race([fetchMarketIndexSnapshotFromRemote(), indexSnapshotTimeout])
     .then((snapshot) => {
       indexCache = snapshot;
       return snapshot;
@@ -1242,7 +1245,10 @@ async function getQuoteSnapshot() {
     return quotePromise;
   }
 
-  quotePromise = fetchQuoteSnapshotFromRemote()
+  const quoteSnapshotTimeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("quote snapshot timed out after 20s")), 20_000)
+  );
+  quotePromise = Promise.race([fetchQuoteSnapshotFromRemote(), quoteSnapshotTimeout])
     .then((snapshot) => {
       quoteCache = snapshot;
       return snapshot;
@@ -1267,11 +1273,13 @@ async function fetchMarketSummaryFromRemote(): Promise<MarketSummarySnapshot> {
       headers: summaryRequestHeaders,
       next: { revalidate: 0 },
       cache: "no-store",
+      signal: AbortSignal.timeout(10_000),
     }),
     fetch(turnoverSummaryUrl, {
       headers: summaryRequestHeaders,
       next: { revalidate: 0 },
       cache: "no-store",
+      signal: AbortSignal.timeout(10_000),
     }),
   ]);
 
@@ -1467,15 +1475,27 @@ function getFallbackQuoteDataFromStocks(
   };
 }
 
-function getFallbackTreemapDataFromStocks(
+async function getFallbackTreemapDataFromStocks(
   stocks: StockSnapshot[],
   period: HeatmapPeriodKey
-): TreemapResponse {
+): Promise<TreemapResponse> {
   const snapshot = stocks.map((stock) => ({
     ...stock,
     turnoverAmount: getStockTurnoverAmount(stock) || estimateFallbackTurnoverAmount(stock),
   }));
   const nodes = buildNodesFromStocks(snapshot, {}, period);
+
+  // Try to fetch real turnover summary from remote (lightweight, one-call)
+  let remoteTurnover: { turnoverPreviousAmount: number; turnoverDelta: number } | undefined;
+  try {
+    const remoteSummary = await fetchMarketSummaryFromRemote();
+    remoteTurnover = {
+      turnoverPreviousAmount: remoteSummary.turnoverPreviousAmount,
+      turnoverDelta: remoteSummary.turnoverDelta,
+    };
+  } catch {
+    // Remote unavailable — will use 0 defaults
+  }
 
   return {
     market: "all",
@@ -1486,6 +1506,8 @@ function getFallbackTreemapDataFromStocks(
     summary: {
       ...summarizeStocks(snapshot, {}, period),
       indexChangePct: weightedChangePct(snapshot, {}, period),
+      turnoverPreviousAmount: remoteTurnover?.turnoverPreviousAmount ?? 0,
+      turnoverDelta: remoteTurnover?.turnoverDelta ?? 0,
     },
     nodes,
     source: "fallback",
@@ -1673,6 +1695,18 @@ async function getFallbackTreemapData(
   const nodes = buildNodesFromStocks(marketStocks, {}, period);
   const fallbackIndexChangePct = weightedChangePct(marketStocks, {}, period);
 
+  // Try to fetch real turnover summary from remote (lightweight, one-call)
+  let remoteTurnover: { turnoverPreviousAmount: number; turnoverDelta: number } | undefined;
+  try {
+    const remoteSummary = await fetchMarketSummaryFromRemote();
+    remoteTurnover = {
+      turnoverPreviousAmount: remoteSummary.turnoverPreviousAmount,
+      turnoverDelta: remoteSummary.turnoverDelta,
+    };
+  } catch {
+    // Remote unavailable — will use 0 defaults
+  }
+
   return {
     market,
     period,
@@ -1682,6 +1716,8 @@ async function getFallbackTreemapData(
     summary: {
       ...summarizeStocks(marketStocks, {}, period),
       indexChangePct: Number.isFinite(indexChangePct) ? indexChangePct : fallbackIndexChangePct,
+      turnoverPreviousAmount: remoteTurnover?.turnoverPreviousAmount ?? 0,
+      turnoverDelta: remoteTurnover?.turnoverDelta ?? 0,
     },
     nodes,
     source: "fallback",

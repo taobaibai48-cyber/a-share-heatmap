@@ -5,7 +5,8 @@
   "regions": ["hkg1"],
   "functions": {
     "app/api/heatmap/treemap/route.ts": {
-      "maxDuration": 60
+      "maxDuration": 60,
+      "regions": ["hkg1"]
     }
   }
 }
