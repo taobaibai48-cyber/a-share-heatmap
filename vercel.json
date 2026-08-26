@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "buildCommand": "next build",
+  "framework": "nextjs",
+  "regions": ["hkg1"],
+  "functions": {
+    "app/api/heatmap/treemap/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}

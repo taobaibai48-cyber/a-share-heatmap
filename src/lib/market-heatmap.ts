@@ -104,6 +104,7 @@ export type HeatmapStockNode = {
   boardName: string;
   subBoardName: string;
   value: number;
+  floatMarketCap: number;
   exchange: ExchangeCode;
   price: number;
   changePct: number;
@@ -1354,6 +1355,7 @@ function buildNodesFromStocks(
       boardName: stock.boardName,
       subBoardName: stock.subBoardName,
       value: getStockValue(stock),
+      floatMarketCap: stock.floatMarketCap || stock.totalMarketCap || 0,
       exchange: stock.exchange,
       price: quote?.price ?? stock.price,
       changePct: getChangeForPeriod(quote?.changes, period, stock.changePct),

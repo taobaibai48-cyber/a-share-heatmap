@@ -1127,7 +1127,7 @@ function getFallTextColor(theme: HeatTheme, colorMode: PriceColorMode, displayMo
 }
 
 function weightedAverageChange(
-  stocks: Array<{ code: string; value: number; changePct: number }>,
+  stocks: Array<{ code: string; value: number; changePct: number; floatMarketCap?: number }>,
   quotes: QuoteMap
 ) {
   let weightedSum = 0;
@@ -1135,8 +1135,10 @@ function weightedAverageChange(
 
   for (const stock of stocks) {
     const changePct = quotes[stock.code]?.changePct ?? stock.changePct;
-    weightedSum += changePct * stock.value;
-    totalValue += stock.value;
+    // 板块涨幅按流通市值加权（与同花顺板块指数口径一致），兜底用色块大小 value
+    const weight = stock.floatMarketCap && stock.floatMarketCap > 0 ? stock.floatMarketCap : stock.value;
+    weightedSum += changePct * weight;
+    totalValue += weight;
   }
 
   if (totalValue <= 0) {
