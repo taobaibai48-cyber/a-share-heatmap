@@ -132,6 +132,8 @@ export type TreemapResponse = {
     turnoverAmount: number;
     turnoverPreviousAmount: number;
     turnoverDelta: number;
+    limitUpCount: number;
+    limitDownCount: number;
     indexChangePct?: number;
   };
   nodes: HeatmapBoardNode[];
@@ -1432,6 +1434,20 @@ function buildNodesFromStocks(
     .sort((left, right) => right.value - left.value);
 }
 
+// A-share daily price-limit threshold (%) by stock code prefix.
+// 主板 ±10%, 创业板(300/301/302) & 科创板(688/689) ±20%, 北交所(920/8xxxxx/4xxxxx) ±30%.
+// ST/*ST 股票为 ±5%, 此处未单独处理（占比极小, 标准看板按板块阈值计）。
+function getLimitThresholdPct(code: string): number {
+  const prefix = code.slice(0, 3);
+  if (prefix === "300" || prefix === "301" || prefix === "302" || prefix === "688" || prefix === "689") {
+    return 20;
+  }
+  if (prefix === "920" || code.startsWith("8") || code.startsWith("4")) {
+    return 30;
+  }
+  return 10;
+}
+
 function summarizeStocks(
   stocks: StockSnapshot[],
   liveQuotes: Record<string, RemoteQuoteValue>,
@@ -1441,6 +1457,8 @@ function summarizeStocks(
   let flatCount = 0;
   let declineCount = 0;
   let turnoverAmount = 0;
+  let limitUpCount = 0;
+  let limitDownCount = 0;
 
   for (const stock of stocks) {
     const quote = liveQuotes[stock.code];
@@ -1454,6 +1472,14 @@ function summarizeStocks(
       flatCount += 1;
     }
 
+    // Limit-up / limit-down detection (account for ±0.1% rounding to 2 decimals)
+    const threshold = getLimitThresholdPct(stock.code) - 0.1;
+    if (changePct >= threshold) {
+      limitUpCount += 1;
+    } else if (changePct <= -threshold) {
+      limitDownCount += 1;
+    }
+
     turnoverAmount += quote?.turnoverAmount ?? getStockTurnoverAmount(stock);
   }
 
@@ -1464,6 +1490,8 @@ function summarizeStocks(
     turnoverAmount,
     turnoverPreviousAmount: 0,
     turnoverDelta: 0,
+    limitUpCount,
+    limitDownCount,
   };
 }
 
@@ -1874,6 +1902,8 @@ export async function getTreemapData(
       turnoverPreviousAmount:
         market === "all" && remoteSummary ? remoteSummary.turnoverPreviousAmount : computedSummary.turnoverPreviousAmount,
       turnoverDelta: market === "all" && remoteSummary ? remoteSummary.turnoverDelta : computedSummary.turnoverDelta,
+      limitUpCount: computedSummary.limitUpCount,
+      limitDownCount: computedSummary.limitDownCount,
       indexChangePct: Number.isFinite(remoteIndexChangePct) ? remoteIndexChangePct : computedIndexChangePct,
     },
     nodes,

@@ -207,6 +207,8 @@ type MarketOverview = {
   turnoverAmount: number;
   turnoverPreviousAmount: number;
   turnoverDelta: number;
+  limitUpCount: number;
+  limitDownCount: number;
 };
 
 type ScreenshotPreview = {
@@ -240,6 +242,8 @@ function createEmptyWatchlistTreemap(period: HeatmapPeriodKey): TreemapResponse 
       turnoverAmount: 0,
       turnoverPreviousAmount: 0,
       turnoverDelta: 0,
+      limitUpCount: 0,
+      limitDownCount: 0,
       indexChangePct: 0,
     },
     nodes: [],
@@ -4899,6 +4903,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       turnoverAmount: visibleTreemapData.summary.turnoverAmount,
       turnoverPreviousAmount: visibleTreemapData.summary.turnoverPreviousAmount,
       turnoverDelta: visibleTreemapData.summary.turnoverDelta,
+      limitUpCount: visibleTreemapData.summary.limitUpCount,
+      limitDownCount: visibleTreemapData.summary.limitDownCount,
     };
   }, [visibleTreemapData]);
 
@@ -6871,6 +6877,37 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                         style={{ color: fallTextColor }}
                       >
                         {formatCount(marketOverview.declineCount, locale)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className={cn("mt-2 grid grid-cols-2 items-stretch gap-1.5 border-t border-border/70 pt-2", isEnglish && "mt-1.5 gap-1 pt-1.5")}>
+                    <div className="flex min-w-0 flex-col items-center text-center">
+                      <p
+                        className={cn("tracking-[0.06em]", isEnglish ? "text-[10px]" : "text-[11px]")}
+                        style={{ color: riseTextColor }}
+                      >
+                        {messages.limitUpLabel}
+                      </p>
+                      <p
+                        className={cn("mt-1 font-semibold tabular-nums", isEnglish ? "text-[13px]" : "text-base")}
+                        style={{ color: riseTextColor }}
+                      >
+                        {formatCount(marketOverview.limitUpCount, locale)}
+                      </p>
+                    </div>
+                    <div className="flex min-w-0 flex-col items-center text-center">
+                      <p
+                        className={cn("tracking-[0.06em]", isEnglish ? "text-[10px]" : "text-[11px]")}
+                        style={{ color: fallTextColor }}
+                      >
+                        {messages.limitDownLabel}
+                      </p>
+                      <p
+                        className={cn("mt-1 font-semibold tabular-nums", isEnglish ? "text-[13px]" : "text-base")}
+                        style={{ color: fallTextColor }}
+                      >
+                        {formatCount(marketOverview.limitDownCount, locale)}
                       </p>
                     </div>
                   </div>
