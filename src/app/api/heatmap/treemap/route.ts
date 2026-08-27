@@ -53,7 +53,7 @@ export async function GET(request: NextRequest) {
       );
     }
     const response = NextResponse.json(data);
-    response.headers.set("Cache-Control", "public, s-maxage=6, stale-while-revalidate=10");
+    response.headers.set("Cache-Control", "public, s-maxage=30, stale-while-revalidate=30");
 
     return response;
   } catch (error) {

@@ -222,7 +222,7 @@ type FilterOpenMode = "click" | "hover";
 type SettingsTab = "appearance" | "watchlist" | "shortcuts" | "help" | "project";
 type HeatmapSizeMode = "marketCap" | "turnover";
 
-const refreshIntervalMs = 8000;
+const refreshIntervalMs = 30000;
 const marketOptions: MarketKey[] = [...marketKeys];
 const periodOptions: HeatmapPeriodKey[] = [...heatmapPeriodKeys];
 

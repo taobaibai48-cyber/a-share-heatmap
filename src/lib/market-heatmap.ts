@@ -285,6 +285,33 @@ let indexCache: MarketIndexSnapshot | null = null;
 let indexPromise: Promise<MarketIndexSnapshot> | null = null;
 let hasLoggedFallbackWarning = false;
 
+// ── Treemap response cache: reuse last good direct response on fallback to prevent layout jumps ──
+interface CachedTreemapEntry {
+  data: TreemapResponse;
+  timestamp: number;
+}
+const treemapCacheTtlMs = 60_000; // 1 minute — covers multiple polling cycles
+const treemapCache = new Map<string, CachedTreemapEntry>();
+
+function getTreemapCacheKey(market: MarketKey, period: HeatmapPeriodKey): string {
+  return `${market}:${period}`;
+}
+
+function getCachedTreemap(market: MarketKey, period: HeatmapPeriodKey): TreemapResponse | null {
+  const key = getTreemapCacheKey(market, period);
+  const entry = treemapCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > treemapCacheTtlMs) {
+    treemapCache.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+
+function setTreemapCache(market: MarketKey, period: HeatmapPeriodKey, data: TreemapResponse): void {
+  treemapCache.set(getTreemapCacheKey(market, period), { data, timestamp: Date.now() });
+}
+
 function toNumber(value: number | string | undefined) {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -1801,6 +1828,20 @@ export async function getTreemapData(
       hasLoggedFallbackWarning = true;
     }
 
+    // Try in-memory cache first — prevents layout jumps when source flips
+    const cached = getCachedTreemap(market, period);
+    if (cached) {
+      console.log("Returning cached treemap response (direct previously succeeded, now using cached)");
+      return { ...cached, updatedAt: new Date().toISOString() };
+    }
+
+    if (!hasLoggedFallbackWarning) {
+      console.warn("Falling back to bundled market heatmap snapshot:", {
+        quotes: quoteResult.reason,
+      });
+      hasLoggedFallbackWarning = true;
+    }
+
     return getFallbackTreemapData(market, period, remoteIndexChangePct);
   }
 
@@ -1812,7 +1853,7 @@ export async function getTreemapData(
   const computedIndexChangePct = weightedChangePct(marketStocks, quoteResult.value.quotes, period);
   const remoteSummary = summaryResult.status === "fulfilled" ? summaryResult.value : null;
 
-  return {
+  const directResponse: TreemapResponse = {
     market,
     period,
     updatedAt: remoteSummary?.updatedAt ?? quoteResult.value.updatedAt,
@@ -1838,6 +1879,11 @@ export async function getTreemapData(
     nodes,
     source: "direct",
   };
+
+  // Cache successful direct response for fallback reuse
+  setTreemapCache(market, period, directResponse);
+
+  return directResponse;
 }
 
 export async function getQuoteData(
