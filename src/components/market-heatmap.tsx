@@ -4567,11 +4567,16 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         return;
       }
       try {
-        await fetchQuotes(market, period, watchlistCodes);
+        // Refresh both treemap data (summary + layout) and individual stock quotes
+        // so the summary panel stays in sync with the heatmap colors.
+        await Promise.all([
+          fetchTreemap(market, period, watchlistCodes),
+          fetchQuotes(market, period, watchlistCodes),
+        ]);
       } catch {
         setError(messages.errorLoad);
       }
-    }, [fetchQuotes, market, messages.errorLoad, period, preferencesReady, watchlistCodes]),
+    }, [fetchTreemap, fetchQuotes, market, messages.errorLoad, period, preferencesReady, watchlistCodes]),
     refreshIntervalMs
   );
 
