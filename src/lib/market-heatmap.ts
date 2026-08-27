@@ -1383,10 +1383,21 @@ function buildNodesFromStocks(
       children.sort((left, right) => right.value - left.value);
       const total = children.reduce((sum, stock) => sum + stock.value, 0);
 
+      // Board-level changePct: floatMarketCap-weighted average of children
+      let weightedSum = 0;
+      let totalWeight = 0;
+      for (const c of children) {
+        const w = c.floatMarketCap || c.value || 0;
+        weightedSum += (c.changePct ?? 0) * w;
+        totalWeight += w;
+      }
+      const boardChangePct = totalWeight > 0 ? weightedSum / totalWeight : 0;
+
       return {
         code: toBoardCode(name),
         name,
         value: total,
+        changePct: boardChangePct,
         stockCount: children.length,
         children,
       };
