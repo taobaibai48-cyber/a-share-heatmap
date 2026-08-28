@@ -574,9 +574,9 @@ function countStockTrends(stocks: Array<{ code: string; changePct: number }>, qu
   for (const stock of stocks) {
     const changePct = quotes[stock.code]?.changePct ?? stock.changePct;
 
-    if (changePct > flatThreshold) {
+    if (changePct > 0) {
       advanceCount += 1;
-    } else if (changePct < -flatThreshold) {
+    } else if (changePct < 0) {
       declineCount += 1;
     } else {
       flatCount += 1;
@@ -685,9 +685,9 @@ function computeLiveSummary(
       const q = quotes[stock.code];
       const changePct = q?.changePct ?? stock.changePct;
 
-      if (changePct > flatThreshold) {
+      if (changePct > 0) {
         advanceCount += 1;
-      } else if (changePct < -flatThreshold) {
+      } else if (changePct < 0) {
         declineCount += 1;
       } else {
         flatCount += 1;
@@ -760,9 +760,9 @@ function filterTreemapByStockPredicate(
     for (const stock of node.children) {
       const changePct = quotes[stock.code]?.changePct ?? stock.changePct;
 
-      if (changePct > flatThreshold) {
+      if (changePct > 0) {
         advanceCount += 1;
-      } else if (changePct < -flatThreshold) {
+      } else if (changePct < 0) {
         declineCount += 1;
       } else {
         flatCount += 1;

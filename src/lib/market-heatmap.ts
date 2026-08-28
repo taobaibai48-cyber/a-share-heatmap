@@ -1469,9 +1469,9 @@ function summarizeStocks(
     const changePct = getChangeForPeriod(quote?.changes, period, stock.changePct);
     const price = quote?.price ?? stock.price;
 
-    if (changePct > flatThreshold) {
+    if (changePct > 0) {
       advanceCount += 1;
-    } else if (changePct < -flatThreshold) {
+    } else if (changePct < 0) {
       declineCount += 1;
     } else {
       flatCount += 1;
