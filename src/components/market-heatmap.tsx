@@ -4416,6 +4416,72 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     [messages.errorLoad]
   );
 
+  // --- Client-side direct eastmoney quote fetch (bypasses Vercel hkg1 egress) ---
+  // When Vercel serverless can't reach eastmoney (common from HK node), the browser
+  // can reach it directly via user's proxy. This provides real-time quote updates.
+  const EASTMONEY_UT = "bd1d9ddb04089700cf9c27f6f7426281";
+
+  function codeToSecid(code: string): string {
+    const m = code.match(/\.(SH|SZ|BJ)$/i);
+    const exch = (m ? m[1] : "SZ").toUpperCase();
+    const pure = code.replace(/\.(SH|SZ|BJ)$/i, "");
+    return `${exch === "SH" ? "1" : "0"}.${pure}`;
+  }
+
+  const fetchDirectEastmoneyQuotes = useCallback(
+    async (currentData: TreemapResponse | null): Promise<QuoteMap | null> => {
+      if (!currentData?.nodes) return null;
+
+      // Collect all stock codes from treemap nodes
+      const codes: string[] = [];
+      for (const node of currentData.nodes) {
+        for (const child of node.children || []) {
+          if (child.code) codes.push(child.code);
+        }
+      }
+      if (codes.length === 0) return null;
+
+      const secids = codes.map(codeToSecid);
+      const allQuotes: QuoteMap = {};
+      const BATCH = 500;
+
+      try {
+        for (let i = 0; i < secids.length; i += BATCH) {
+          const batch = secids.slice(i, i + BATCH);
+          const url =
+            `https://push2delay.eastmoney.com/api/qt/ulist.np/get?ut=${EASTMONEY_UT}` +
+            `&fltt=2&invt=2&fields=f12,f2,f3,f6&secids=${batch.join(",")}`;
+
+          const res = await fetch(url, { cache: "no-store" });
+          if (!res.ok) continue;
+
+          const json = await res.json();
+          const diff = json.data?.diff;
+          if (!diff) continue;
+
+          const items = Array.isArray(diff) ? diff : Object.values(diff) as Record<string, unknown>[];
+          for (const item of items) {
+            const it = item as Record<string, unknown>;
+            const code = String(it.f12 ?? "");
+            const price = Number(it.f2);
+            const changePct = Number(it.f3);
+            const turnoverAmount = Number(it.f6) || 0;
+            if (code && Number.isFinite(price) && Number.isFinite(changePct)) {
+              // Map pure code back to full code with exchange suffix
+              const fullCode = codes.find(c => c.replace(/\.(SH|SZ|BJ)$/i, "") === code) || code;
+              allQuotes[fullCode] = { price, changePct, turnoverAmount };
+            }
+          }
+        }
+        return Object.keys(allQuotes).length > 0 ? allQuotes : null;
+      } catch {
+        // CORS / network error — silent fail, server-side quotes still work
+        return null;
+      }
+    },
+    []
+  );
+
   const fetchMarketSummaries = useCallback(async (nextPeriod: HeatmapPeriodKey) => {
     const response = await fetch(`/api/heatmap/overview?period=${nextPeriod}`);
     if (!response.ok) {
@@ -4573,14 +4639,28 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       try {
         // Refresh both treemap data (summary + layout) and individual stock quotes
         // so the summary panel stays in sync with the heatmap colors.
-        await Promise.all([
+        const [treemapResult, quotesResult] = await Promise.all([
           fetchTreemap(market, period, watchlistCodes),
           fetchQuotes(market, period, watchlistCodes),
         ]);
+
+        // Client-side direct eastmoney fetch (bypasses Vercel hkg1 egress).
+        // When Vercel can't reach eastmoney, the browser (via user's proxy) often can.
+        // This provides real-time quote updates even when server-side returns fallback data.
+        if (treemapData) {
+          try {
+            const directQuotes = await fetchDirectEastmoneyQuotes(treemapData);
+            if (directQuotes && Object.keys(directQuotes).length > 0) {
+              setQuotes(directQuotes);
+            }
+          } catch {
+            // Silent — server-side quotes are still displayed
+          }
+        }
       } catch {
         setError(messages.errorLoad);
       }
-    }, [fetchTreemap, fetchQuotes, market, messages.errorLoad, period, preferencesReady, watchlistCodes]),
+    }, [fetchTreemap, fetchQuotes, fetchDirectEastmoneyQuotes, market, messages.errorLoad, period, preferencesReady, watchlistCodes, treemapData]),
     refreshIntervalMs
   );
 
