@@ -134,6 +134,8 @@ export type TreemapResponse = {
     turnoverDelta: number;
     limitUpCount: number;
     limitDownCount: number;
+    avgPrice: number;
+    medianChangePct: number;
     indexChangePct?: number;
   };
   nodes: HeatmapBoardNode[];
@@ -1459,10 +1461,13 @@ function summarizeStocks(
   let turnoverAmount = 0;
   let limitUpCount = 0;
   let limitDownCount = 0;
+  let totalPrice = 0;
+  const changePcts: number[] = [];
 
   for (const stock of stocks) {
     const quote = liveQuotes[stock.code];
     const changePct = getChangeForPeriod(quote?.changes, period, stock.changePct);
+    const price = quote?.price ?? stock.price;
 
     if (changePct > flatThreshold) {
       advanceCount += 1;
@@ -1481,6 +1486,21 @@ function summarizeStocks(
     }
 
     turnoverAmount += quote?.turnoverAmount ?? getStockTurnoverAmount(stock);
+    totalPrice += price;
+    changePcts.push(changePct);
+  }
+
+  const avgPrice = stocks.length > 0 ? totalPrice / stocks.length : 0;
+
+  // Median changePct
+  let medianChangePct = 0;
+  if (changePcts.length > 0) {
+    const sorted = [...changePcts].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    medianChangePct =
+      sorted.length % 2 === 0
+        ? (sorted[mid - 1] + sorted[mid]) / 2
+        : sorted[mid];
   }
 
   return {
@@ -1492,6 +1512,8 @@ function summarizeStocks(
     turnoverDelta: 0,
     limitUpCount,
     limitDownCount,
+    avgPrice,
+    medianChangePct,
   };
 }
 
@@ -1904,6 +1926,8 @@ export async function getTreemapData(
       turnoverDelta: market === "all" && remoteSummary ? remoteSummary.turnoverDelta : computedSummary.turnoverDelta,
       limitUpCount: computedSummary.limitUpCount,
       limitDownCount: computedSummary.limitDownCount,
+      avgPrice: computedSummary.avgPrice,
+      medianChangePct: computedSummary.medianChangePct,
       indexChangePct: Number.isFinite(remoteIndexChangePct) ? remoteIndexChangePct : computedIndexChangePct,
     },
     nodes,

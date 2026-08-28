@@ -209,6 +209,8 @@ type MarketOverview = {
   turnoverDelta: number;
   limitUpCount: number;
   limitDownCount: number;
+  avgPrice: number;
+  medianChangePct: number;
 };
 
 type ScreenshotPreview = {
@@ -244,6 +246,8 @@ function createEmptyWatchlistTreemap(period: HeatmapPeriodKey): TreemapResponse 
       turnoverDelta: 0,
       limitUpCount: 0,
       limitDownCount: 0,
+      avgPrice: 0,
+      medianChangePct: 0,
       indexChangePct: 0,
     },
     nodes: [],
@@ -4985,6 +4989,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       turnoverDelta: visibleTreemapData.summary.turnoverDelta,
       limitUpCount: visibleTreemapData.summary.limitUpCount,
       limitDownCount: visibleTreemapData.summary.limitDownCount,
+      avgPrice: visibleTreemapData.summary.avgPrice,
+      medianChangePct: visibleTreemapData.summary.medianChangePct,
     };
   }, [visibleTreemapData]);
 
@@ -7069,6 +7075,59 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                           </>
                         );
                       })()}
+                    </div>
+                  </div>
+
+                  <div className={cn("mt-2 grid grid-cols-2 items-stretch gap-1.5 border-t border-border/70 pt-2", isEnglish && "mt-1.5 gap-1 pt-1.5")}>
+                    <div className="flex min-w-0 flex-col">
+                      <p
+                        className={cn(
+                          "leading-tight tracking-[0.04em] text-muted-foreground",
+                          isEnglish ? "text-[9px]" : "text-[10px]"
+                        )}
+                      >
+                        {messages.avgPriceLabel}
+                      </p>
+                      <p
+                        className={cn(
+                          "mt-auto whitespace-nowrap pt-1 font-semibold tracking-[-0.01em] text-foreground",
+                          isEnglish ? "text-[11.5px] sm:text-[12px]" : "text-[13px] sm:text-[14px]"
+                        )}
+                      >
+                        {marketOverview.avgPrice > 0
+                          ? locale === "zh"
+                            ? `¥${marketOverview.avgPrice.toFixed(2)}`
+                            : marketOverview.avgPrice.toFixed(2)
+                          : "--"}
+                      </p>
+                    </div>
+                    <div className="flex min-w-0 flex-col">
+                      <p
+                        className={cn(
+                          "leading-tight tracking-[0.04em] text-muted-foreground",
+                          isEnglish ? "text-[9px]" : "text-[10px]"
+                        )}
+                      >
+                        {messages.medianChangeLabel}
+                      </p>
+                      <p
+                        className={cn(
+                          "mt-auto whitespace-nowrap pt-1 font-semibold tracking-[-0.01em]",
+                          isEnglish ? "text-[11.5px] sm:text-[12px]" : "text-[13px] sm:text-[14px]"
+                        )}
+                        style={{
+                          color:
+                            marketOverview.medianChangePct > 0.05
+                              ? riseTextColor
+                              : marketOverview.medianChangePct < -0.05
+                                ? fallTextColor
+                                : undefined,
+                        }}
+                      >
+                        {marketOverview.medianChangePct !== 0
+                          ? `${marketOverview.medianChangePct >= 0 ? "+" : ""}${marketOverview.medianChangePct.toFixed(2)}%`
+                          : "--"}
+                      </p>
                     </div>
                   </div>
 
