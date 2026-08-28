@@ -134,7 +134,7 @@ export type TreemapResponse = {
     turnoverDelta: number;
     limitUpCount: number;
     limitDownCount: number;
-    avgPrice: number;
+    avgChangePct: number;
     medianChangePct: number;
     indexChangePct?: number;
   };
@@ -1490,7 +1490,9 @@ function summarizeStocks(
     changePcts.push(changePct);
   }
 
-  const avgPrice = stocks.length > 0 ? totalPrice / stocks.length : 0;
+  const avgChangePct = changePcts.length > 0
+    ? changePcts.reduce((s, v) => s + v, 0) / changePcts.length
+    : 0;
 
   // Median changePct
   let medianChangePct = 0;
@@ -1512,7 +1514,7 @@ function summarizeStocks(
     turnoverDelta: 0,
     limitUpCount,
     limitDownCount,
-    avgPrice,
+    avgChangePct,
     medianChangePct,
   };
 }
@@ -1926,7 +1928,7 @@ export async function getTreemapData(
       turnoverDelta: market === "all" && remoteSummary ? remoteSummary.turnoverDelta : computedSummary.turnoverDelta,
       limitUpCount: computedSummary.limitUpCount,
       limitDownCount: computedSummary.limitDownCount,
-      avgPrice: computedSummary.avgPrice,
+      avgChangePct: computedSummary.avgChangePct,
       medianChangePct: computedSummary.medianChangePct,
       indexChangePct: Number.isFinite(remoteIndexChangePct) ? remoteIndexChangePct : computedIndexChangePct,
     },

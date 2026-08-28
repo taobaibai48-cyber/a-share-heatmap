@@ -209,7 +209,7 @@ type MarketOverview = {
   turnoverDelta: number;
   limitUpCount: number;
   limitDownCount: number;
-  avgPrice: number;
+  avgChangePct: number;
   medianChangePct: number;
 };
 
@@ -246,7 +246,7 @@ function createEmptyWatchlistTreemap(period: HeatmapPeriodKey): TreemapResponse 
       turnoverDelta: 0,
       limitUpCount: 0,
       limitDownCount: 0,
-      avgPrice: 0,
+      avgChangePct: 0,
       medianChangePct: 0,
       indexChangePct: 0,
     },
@@ -669,7 +669,7 @@ function computeLiveSummary(
   turnoverAmount: number;
   limitUpCount: number;
   limitDownCount: number;
-  avgPrice: number;
+  avgChangePct: number;
   medianChangePct: number;
 } {
   let advanceCount = 0;
@@ -677,7 +677,6 @@ function computeLiveSummary(
   let declineCount = 0;
   let limitUpCount = 0;
   let limitDownCount = 0;
-  let totalPrice = 0;
   let turnoverAmount = 0;
   const changePcts: number[] = [];
 
@@ -685,7 +684,6 @@ function computeLiveSummary(
     for (const stock of board.children) {
       const q = quotes[stock.code];
       const changePct = q?.changePct ?? stock.changePct;
-      const price = q?.price ?? stock.price;
 
       if (changePct > flatThreshold) {
         advanceCount += 1;
@@ -702,13 +700,14 @@ function computeLiveSummary(
         limitDownCount += 1;
       }
 
-      totalPrice += price;
       turnoverAmount += q?.turnoverAmount ?? stock.turnoverAmount;
       changePcts.push(changePct);
     }
   }
 
-  const avgPrice = changePcts.length > 0 ? totalPrice / changePcts.length : 0;
+  const avgChangePct = changePcts.length > 0
+    ? changePcts.reduce((s, v) => s + v, 0) / changePcts.length
+    : 0;
 
   let medianChangePct = 0;
   if (changePcts.length > 0) {
@@ -725,7 +724,7 @@ function computeLiveSummary(
     turnoverAmount,
     limitUpCount,
     limitDownCount,
-    avgPrice,
+    avgChangePct,
     medianChangePct,
   };
 }
@@ -5084,7 +5083,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       turnoverDelta: visibleTreemapData.summary.turnoverDelta,
       limitUpCount: live.limitUpCount,
       limitDownCount: live.limitDownCount,
-      avgPrice: live.avgPrice,
+      avgChangePct: live.avgChangePct,
       medianChangePct: live.medianChangePct,
     };
   }, [quotes, visibleTreemapData]);
@@ -7181,18 +7180,21 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                           isEnglish ? "text-[9px]" : "text-[10px]"
                         )}
                       >
-                        {messages.avgPriceLabel}
+                        {messages.avgChangeLabel}
                       </p>
                       <p
                         className={cn(
-                          "mt-auto whitespace-nowrap pt-1 font-semibold tracking-[-0.01em] text-foreground",
-                          isEnglish ? "text-[11.5px] sm:text-[12px]" : "text-[13px] sm:text-[14px]"
+                          "mt-auto whitespace-nowrap pt-1 font-semibold tracking-[-0.01em]",
+                          isEnglish ? "text-[11.5px] sm:text-[12px]" : "text-[13px] sm:text-[14px]",
+                          (marketOverview.avgChangePct ?? 0) > 0
+                            ? "text-red-500 dark:text-red-400"
+                            : (marketOverview.avgChangePct ?? 0) < 0
+                              ? "text-green-500 dark:text-green-400"
+                              : "text-foreground"
                         )}
                       >
-                        {marketOverview.avgPrice > 0
-                          ? locale === "zh"
-                            ? `¥${marketOverview.avgPrice.toFixed(2)}`
-                            : marketOverview.avgPrice.toFixed(2)
+                        {marketOverview.avgChangePct != null
+                          ? `${marketOverview.avgChangePct >= 0 ? "+" : ""}${marketOverview.avgChangePct.toFixed(2)}%`
                           : "--"}
                       </p>
                     </div>
