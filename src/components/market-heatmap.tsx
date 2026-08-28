@@ -644,6 +644,92 @@ function getLiveTurnoverAmount(code: string, fallback: number, quotes: QuoteMap)
   return fallback;
 }
 
+// Per-stock limit-up/down threshold (%). Mirrors lib/market-heatmap.ts getLimitThresholdPct.
+function getLimitThresholdPct(code: string): number {
+  const prefix = code.slice(0, 3);
+  if (prefix === "300" || prefix === "301" || prefix === "302" || prefix === "688" || prefix === "689") {
+    return 20;
+  }
+  if (prefix === "920" || code.startsWith("8") || code.startsWith("4")) {
+    return 30;
+  }
+  return 10;
+}
+
+// Recompute the market overview from the frozen treemap structure + live quotes.
+// This keeps the summary panel real-time without re-fetching the whole treemap
+// (which would re-trigger the squarified layout recompute and cause visible "jumping").
+function computeLiveSummary(
+  nodes: TreemapResponse["nodes"],
+  quotes: QuoteMap
+): {
+  advanceCount: number;
+  flatCount: number;
+  declineCount: number;
+  turnoverAmount: number;
+  limitUpCount: number;
+  limitDownCount: number;
+  avgPrice: number;
+  medianChangePct: number;
+} {
+  let advanceCount = 0;
+  let flatCount = 0;
+  let declineCount = 0;
+  let limitUpCount = 0;
+  let limitDownCount = 0;
+  let totalPrice = 0;
+  let turnoverAmount = 0;
+  const changePcts: number[] = [];
+
+  for (const board of nodes) {
+    for (const stock of board.children) {
+      const q = quotes[stock.code];
+      const changePct = q?.changePct ?? stock.changePct;
+      const price = q?.price ?? stock.price;
+
+      if (changePct > flatThreshold) {
+        advanceCount += 1;
+      } else if (changePct < -flatThreshold) {
+        declineCount += 1;
+      } else {
+        flatCount += 1;
+      }
+
+      const threshold = getLimitThresholdPct(stock.code) - 0.1;
+      if (changePct >= threshold) {
+        limitUpCount += 1;
+      } else if (changePct <= -threshold) {
+        limitDownCount += 1;
+      }
+
+      totalPrice += price;
+      turnoverAmount += q?.turnoverAmount ?? stock.turnoverAmount;
+      changePcts.push(changePct);
+    }
+  }
+
+  const avgPrice = changePcts.length > 0 ? totalPrice / changePcts.length : 0;
+
+  let medianChangePct = 0;
+  if (changePcts.length > 0) {
+    const sorted = [...changePcts].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    medianChangePct =
+      sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+  }
+
+  return {
+    advanceCount,
+    flatCount,
+    declineCount,
+    turnoverAmount,
+    limitUpCount,
+    limitDownCount,
+    avgPrice,
+    medianChangePct,
+  };
+}
+
 function filterTreemapByStockPredicate(
   data: TreemapResponse,
   quotes: QuoteMap,
@@ -711,11 +797,15 @@ function normalizeSizeValue(value: number) {
 
 function getStockSizeValue(
   stock: { code: string; value: number; turnoverAmount: number },
-  quotes: QuoteMap,
+  _quotes: QuoteMap,
   sizeMode: HeatmapSizeMode
 ) {
+  // NOTE: layout size is intentionally derived from the FROZEN treemap structure
+  // (not live quotes) so the squarified layout never recomputes between polls.
+  // Recomputing on live turnover each cycle caused the whole heatmap to "jump".
+  // Colors/hover still use live quotes elsewhere.
   if (sizeMode === "turnover") {
-    return normalizeSizeValue(getLiveTurnoverAmount(stock.code, stock.turnoverAmount, quotes));
+    return normalizeSizeValue(stock.turnoverAmount);
   }
 
   return stock.value;
@@ -4641,12 +4731,11 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         return;
       }
       try {
-        // Refresh both treemap data (summary + layout) and individual stock quotes
-        // so the summary panel stays in sync with the heatmap colors.
-        const [treemapResult, quotesResult] = await Promise.all([
-          fetchTreemap(market, period, watchlistCodes),
-          fetchQuotes(market, period, watchlistCodes),
-        ]);
+        // Refresh only live quotes. The treemap STRUCTURE + layout sizes stay frozen
+        // after the initial load — re-fetching the whole treemap every cycle causes the
+        // squarified layout to recompute (different turnover snapshots → blocks resize → "jumping").
+        // Colors/hover already read live quotes; the summary panel is recomputed client-side below.
+        await fetchQuotes(market, period, watchlistCodes);
 
         // Client-side direct eastmoney fetch (bypasses Vercel hkg1 egress).
         // When Vercel can't reach eastmoney, the browser (via user's proxy) often can.
@@ -4660,11 +4749,12 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
           } catch {
             // Silent — server-side quotes are still displayed
           }
+          setUpdatedAt(new Date().toISOString());
         }
       } catch {
-        setError(messages.errorLoad);
+        // Keep the last good quotes/treemap; never blank the map on a transient refresh error.
       }
-    }, [fetchTreemap, fetchQuotes, fetchDirectEastmoneyQuotes, market, messages.errorLoad, period, preferencesReady, watchlistCodes, treemapData]),
+    }, [fetchQuotes, fetchDirectEastmoneyQuotes, market, period, preferencesReady, watchlistCodes, treemapData]),
     refreshIntervalMs
   );
 
@@ -4980,19 +5070,24 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       return null;
     }
 
+    // Recompute the live overview from the frozen treemap structure + real-time quotes,
+    // so the panel tracks the market every poll without re-fetching the whole treemap
+    // (which would re-trigger the layout recompute and cause visible "jumping").
+    const live = computeLiveSummary(visibleTreemapData.nodes, quotes);
+
     return {
-      advanceCount: visibleTreemapData.summary.advanceCount,
-      flatCount: visibleTreemapData.summary.flatCount,
-      declineCount: visibleTreemapData.summary.declineCount,
-      turnoverAmount: visibleTreemapData.summary.turnoverAmount,
+      advanceCount: live.advanceCount,
+      flatCount: live.flatCount,
+      declineCount: live.declineCount,
+      turnoverAmount: live.turnoverAmount,
       turnoverPreviousAmount: visibleTreemapData.summary.turnoverPreviousAmount,
       turnoverDelta: visibleTreemapData.summary.turnoverDelta,
-      limitUpCount: visibleTreemapData.summary.limitUpCount,
-      limitDownCount: visibleTreemapData.summary.limitDownCount,
-      avgPrice: visibleTreemapData.summary.avgPrice,
-      medianChangePct: visibleTreemapData.summary.medianChangePct,
+      limitUpCount: live.limitUpCount,
+      limitDownCount: live.limitDownCount,
+      avgPrice: live.avgPrice,
+      medianChangePct: live.medianChangePct,
     };
-  }, [visibleTreemapData]);
+  }, [quotes, visibleTreemapData]);
 
   const sizedTreemapData = useMemo(
     () => (visibleTreemapData ? applySizeModeToTreemapData(visibleTreemapData, quotes, sizeMode) : null),
